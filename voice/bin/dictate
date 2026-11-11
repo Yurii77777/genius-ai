@@ -48,10 +48,10 @@ speech_db="${DICTATE_SPEECH_DB:--36}"   # 100 ms RMS above this is speech (your 
 quiet_blocks=$(awk -v s="$pause" 'BEGIN { printf "%d", s * 10 }')   # blocks of 100 ms
 wait_blocks=$(awk -v s="$wait_s" 'BEGIN { printf "%d", s * 10 }')
 
-echo "🎙  Говоріть… (зупиниться після ${pause} с паузи)"
+echo "🎙  Speak… (stops after ${pause} s of quiet)"
 "$voice/bin/speak" stop 2>/dev/null     # never record the spoken reply
 /usr/bin/python3 "$voice/lib/stt_client.py" --warm   # load Whisper while you speak
-sound Tink; note "🎙 Слухаю…"
+sound Tink; note "🎙 Listening…"
 # astats prints the RMS of every 100 ms block to the log, live: short clicks barely move an RMS,
 # unlike silencedetect's per-sample peak, which every key press reset
 ffmpeg -loglevel info -nostdin -f avfoundation -i ":0" -t "$max_s" \
@@ -63,7 +63,7 @@ print -r -- $$ >"$pidfile"
 start=$SECONDS
 while kill -0 $rec 2>/dev/null; do
   # ffmpeg's -t is not enforced when the mic delivers no timestamps: own wall-clock cap
-  (( SECONDS - start >= max_s )) && { echo "⏹  ${max_s} с — зупиняю запис"; break; }
+  (( SECONDS - start >= max_s )) && { echo "⏹  ${max_s} s — stopping the recording"; break; }
   (( stop )) && break
   if [[ -t 0 ]] && read -t 0.15 -r _; then break; fi
   [[ -t 0 ]] || sleep 0.15
@@ -80,18 +80,18 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 $rec 2>/dev/null || break; sleep 0.2; 
 kill -9 $rec 2>/dev/null; wait $rec 2>/dev/null; rec=""
 rm -f "$pidfile"
 cp "$tmp/ff.log" "$run/last-ff.log" 2>/dev/null
-[[ $verdict == idle ]] && { echo "🤐 нічого не почув"; note "🤐 Нічого не почув"; exit 0; }
-sound Pop; note "⏳ Розпізнаю…"
+[[ $verdict == idle ]] && { echo "🤐 heard nothing"; note "🤐 Heard nothing"; exit 0; }
+sound Pop; note "⏳ Transcribing…"
 
-echo "⏳ Розпізнаю…"
+echo "⏳ Transcribing…"
 if ! /usr/bin/python3 "$voice/lib/stt_client.py" "$tmp/in.wav" "$lang" >"$tmp/in.txt" 2>"$tmp/w.log"; then
-  sound Basso; note "❌ Не вдалося розпізнати"
-  echo "❌ розпізнавання не спрацювало:"; tail -5 "$tmp/w.log"; exit 1
+  sound Basso; note "❌ Transcription failed"
+  echo "❌ transcription failed:"; tail -5 "$tmp/w.log"; exit 1
 fi
 
 text=$(tr '\n' ' ' < "$tmp/in.txt" | sed 's/  */ /g; s/^ //; s/ $//')
 detected=$(grep '^LANG ' "$tmp/w.log" | tail -1 | cut -d' ' -f2)
-[[ -z $text ]] && { echo "🤐 нічого не почув"; note "🤐 Нічого не почув"; exit 0; }
+[[ -z $text ]] && { echo "🤐 heard nothing"; note "🤐 Heard nothing"; exit 0; }
 
 if (( paste )); then
   # paste through the clipboard (Unicode-safe), then give the old clipboard back

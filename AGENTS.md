@@ -140,6 +140,7 @@ A longer message that only mentions sound passes through. Dictation (F5) works a
 - Whisper large-v3-turbo runs in `voice/lib/stt_server.py`. It stays loaded between takes and unloads after 15 min idle.
 - The SessionStart hook runs `voice/bin/dictate-setup start`. After a reboot F5 works once Claude is opened in this folder.
 - `voice/bin/dictate-setup status | stop`.
+- macOS notifications (dictation, screen recording) are always in English, whatever the user's `language` (the user's decision of 2026-11-11).
 - Settings (env): `DICTATE_PAUSE`, `DICTATE_WAIT`, `DICTATE_MAX`, `DICTATE_IDLE`, `DICTATE_SEND`, `DICTATE_LANGS`.
 
 ## Config schema

@@ -14,7 +14,7 @@ if [[ -f $pidfile ]] && pid=$(<"$pidfile") && kill -0 "$pid" 2>/dev/null; then
   kill -INT "$pid"                          # screencapture finalises the .mov on SIGINT
   for _ in {1..25}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
   rm -f "$pidfile" "$pidfile.file"
-  note "⏹ Збережено: ${file:t}"
+  note "⏹ Saved: ${file:t}"
   echo "⏹ $file"
   exit 0
 fi
@@ -25,5 +25,5 @@ screencapture -v -g -k -C "$file" </dev/null >/dev/null 2>&1 &!
 pid=$!
 print -r -- "$pid" >"$pidfile"
 print -r -- "$file" >"$pidfile.file"
-note "⏺ Запис з мікрофоном — натисніть ще раз, щоб зупинити"
-echo "⏺ запис → $file (ще раз screenrec — стоп)"
+note "⏺ Recording with microphone — press again to stop"
+echo "⏺ recording → $file (run screenrec again to stop)"
