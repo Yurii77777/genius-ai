@@ -1,0 +1,31 @@
+{
+  "default_language": "uk",
+  "languages": {
+    "uk": {
+      "engine": "styletts2",
+      "speed": 1.12,
+      "female": "Катерина Потапенко",
+      "male": "Михайло Тишин",
+      "say": {
+        "female": "Lesya",
+        "male": "Lesya"
+      }
+    },
+    "en": {
+      "engine": "kokoro",
+      "speed": 1.0,
+      "female": "af_heart",
+      "male": "am_michael",
+      "say": {
+        "female": "Samantha",
+        "male": "Eddy (English (US))"
+      }
+    }
+  },
+  "pace": {
+    "comment": "inside one project: normal speech, a tiny pause between sentences; a new project («Сайт: …», «Чіка: …») is announced by a soft sound and a short pause",
+    "sentence_pause": 0.1,
+    "topic_pause": 0.35,
+    "topic_sound": "/System/Library/Sounds/Tink.aiff"
+  }
+}

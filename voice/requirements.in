@@ -1,0 +1,13 @@
+# One environment for every voice engine. Lock: requirements.lock (uv pip compile).
+# Ukrainian: StyleTTS2 + word stress + IPA (pinned patriotyk revisions).
+styletts2-inference @ git+https://github.com/patriotyk/styletts2-inference@209352700cf703a05ff94501290095dd9072fd5f
+ukrainian-word-stress @ git+https://github.com/patriotyk/ukrainian-word-stress.git@d5b37ea0abe9711930d9c3b0b13edec5a0675512
+ipa-uk @ git+https://github.com/patriotyk/ipa-uk.git@3faf05ec50fd4880965b6c76f8e479a4f82117f5
+torch==2.8.0
+torchaudio==2.8.0
+soundfile==0.14.0
+# English: Kokoro-82M + its spaCy model for misaki.
+kokoro==0.9.4
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+# Voice input: Whisper large-v3-turbo on the Apple GPU (MLX).
+mlx-whisper==0.4.3

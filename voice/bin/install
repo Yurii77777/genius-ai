@@ -1,0 +1,3 @@
+#!/bin/zsh
+# install — put the voice into the project (voice/.venv, voice/models). Asks nothing.
+exec /usr/bin/python3 "${0:A:h:h}/lib/install.py" "$@"

@@ -1,0 +1,108 @@
+#!/bin/zsh
+# launchd starts us with no locale: without UTF-8, pbcopy/pbpaste mangle Cyrillic as Mac Roman
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+# dictate — one key, it hears you: record from the default mic, transcribe locally
+# with Whisper (language detected automatically), print the text and copy it.
+#   dictate            record → transcribe → print + clipboard
+#   dictate --paste    … paste into the focused window and press Enter (F5 does this;
+#                      DICTATE_SEND=0 pastes without sending)
+#   dictate uk|en      force a language instead of detecting it
+# The take ends after DICTATE_PAUSE s of quiet after speech (default 1.5, as before the move), after DICTATE_WAIT s
+# when nothing is said at all (default 15), on a second F5 press, or on Enter in a terminal;
+# hard cap DICTATE_MAX s (default 600).
+# Whisper large-v3-turbo runs in stt-server (voice/lib/stt_server.py): it stays loaded between
+# takes and unloads after 15 min idle (DICTATE_IDLE). Everything lives in the project:
+# voice/.venv, voice/models/whisper, runtime state in voice/run. Nothing is downloaded at run time.
+export PATH="${0:A:h:h}/tools/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"   # project tools first (voice/bin/install)
+voice="${0:A:h:h}"
+run="$voice/run"
+mkdir -p "$run"
+
+paste=0 lang=auto
+for a in "$@"; do
+  case $a in
+    --paste) paste=1 ;;
+    *) lang=$a ;;
+  esac
+done
+
+tmp=$(mktemp -d "$run/take.XXXXXX")
+rec=""
+# kill the recorder too, so a killed dictate never leaves ffmpeg holding the mic
+pidfile="$run/recording.pid"
+trap '[[ -n $rec ]] && kill -9 $rec 2>/dev/null; rm -rf "$tmp"; rm -f "$pidfile"' EXIT INT TERM HUP
+# a second press of the hotkey (dictate-hotkey sends SIGUSR1) ends the recording now
+stop=0
+trap 'stop=1' USR1
+
+# silent by default (DICTATE_SOUND=1 brings the sounds back); with --paste there is no
+# terminal to read, so the state shows as a quiet notification banner instead
+sound() { [[ ${DICTATE_SOUND:-0} == 1 ]] && afplay "/System/Library/Sounds/$1.aiff" 2>/dev/null & }
+note() { (( paste )) && osascript -e "display notification \"$1\" with title \"Dictate\"" >/dev/null 2>&1 & }
+
+pause="${DICTATE_PAUSE:-1.5}"           # seconds of quiet after speech that end the take
+wait_s="${DICTATE_WAIT:-15}"            # seconds without any speech that end the take
+max_s="${DICTATE_MAX:-600}"             # hard cap of one take
+speech_db="${DICTATE_SPEECH_DB:--36}"   # 100 ms RMS above this is speech (your mic: speech -23…-32,
+                                        # room and key clicks -40…-65)
+quiet_blocks=$(awk -v s="$pause" 'BEGIN { printf "%d", s * 10 }')   # blocks of 100 ms
+wait_blocks=$(awk -v s="$wait_s" 'BEGIN { printf "%d", s * 10 }')
+
+echo "🎙  Говоріть… (зупиниться після ${pause} с паузи)"
+"$voice/bin/speak" stop 2>/dev/null     # never record the spoken reply
+/usr/bin/python3 "$voice/lib/stt_client.py" --warm   # load Whisper while you speak
+sound Tink; note "🎙 Слухаю…"
+# astats prints the RMS of every 100 ms block to the log, live: short clicks barely move an RMS,
+# unlike silencedetect's per-sample peak, which every key press reset
+ffmpeg -loglevel info -nostdin -f avfoundation -i ":0" -t "$max_s" \
+  -af "asetnsamples=n=4800:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level" \
+  -ar 16000 -ac 1 "$tmp/in.wav" 2>"$tmp/ff.log" &
+rec=$!
+print -r -- $$ >"$pidfile"
+
+start=$SECONDS
+while kill -0 $rec 2>/dev/null; do
+  # ffmpeg's -t is not enforced when the mic delivers no timestamps: own wall-clock cap
+  (( SECONDS - start >= max_s )) && { echo "⏹  ${max_s} с — зупиняю запис"; break; }
+  (( stop )) && break
+  if [[ -t 0 ]] && read -t 0.15 -r _; then break; fi
+  [[ -t 0 ]] || sleep 0.15
+  # verdict over the blocks so far: "stop" after speech + a long enough quiet tail,
+  # "idle" when nothing was said for DICTATE_WAIT s
+  verdict=$(grep -o 'RMS_level=[-0-9.inf]*' "$tmp/ff.log" | cut -d= -f2 | awk -v th="$speech_db" \
+      -v need="$quiet_blocks" -v wait="$wait_blocks" '
+    { n++; if ($1 != "-inf" && $1 + 0 > th) { spoke = 1; tail = 0 } else tail++ }
+    END { if (spoke && tail >= need) print "stop"; else if (!spoke && n >= wait) print "idle" }')
+  [[ -n $verdict ]] && break
+done
+kill -INT $rec 2>/dev/null
+for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 $rec 2>/dev/null || break; sleep 0.2; done
+kill -9 $rec 2>/dev/null; wait $rec 2>/dev/null; rec=""
+rm -f "$pidfile"
+cp "$tmp/ff.log" "$run/last-ff.log" 2>/dev/null
+[[ $verdict == idle ]] && { echo "🤐 нічого не почув"; note "🤐 Нічого не почув"; exit 0; }
+sound Pop; note "⏳ Розпізнаю…"
+
+echo "⏳ Розпізнаю…"
+if ! /usr/bin/python3 "$voice/lib/stt_client.py" "$tmp/in.wav" "$lang" >"$tmp/in.txt" 2>"$tmp/w.log"; then
+  sound Basso; note "❌ Не вдалося розпізнати"
+  echo "❌ розпізнавання не спрацювало:"; tail -5 "$tmp/w.log"; exit 1
+fi
+
+text=$(tr '\n' ' ' < "$tmp/in.txt" | sed 's/  */ /g; s/^ //; s/ $//')
+detected=$(grep '^LANG ' "$tmp/w.log" | tail -1 | cut -d' ' -f2)
+[[ -z $text ]] && { echo "🤐 нічого не почув"; note "🤐 Нічого не почув"; exit 0; }
+
+if (( paste )); then
+  # paste through the clipboard (Unicode-safe), then give the old clipboard back
+  old=$(pbpaste 2>/dev/null)
+  print -rn -- "$text" | pbcopy
+  osascript -e 'tell application "System Events" to keystroke "v" using command down' >/dev/null
+  sleep 0.3
+  # …and send it as your message (Enter), unless DICTATE_SEND=0
+  [[ ${DICTATE_SEND:-1} == 1 ]] && osascript -e 'tell application "System Events" to key code 36' >/dev/null
+  print -rn -- "$old" | pbcopy
+else
+  print -rn -- "$text" | pbcopy
+fi
+echo "🗣 [$detected] $text"

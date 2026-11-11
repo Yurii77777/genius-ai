@@ -1,0 +1,134 @@
+#!/bin/zsh
+# dictate-setup — 🎤 (F5) runs `dictate --paste` and ⌃⇧5 toggles `screenrec`. Nothing outside the project.
+#   dictate-setup [start]    build the listener if needed, remap 🎤/F5 → F13, start the listener
+#   dictate-setup stop       stop the listener and stt-server, give the 🎤 key back to macOS
+#   dictate-setup status     show what runs
+#   dictate-setup uninstall  stop, and remove the old global install (LaunchAgents, ~/.local) if any is left
+# The listener is voice/build/dictate-hotkey, started with `launchctl submit` (an in-memory job:
+# no file in ~/Library/LaunchAgents). A reboot or logout clears the job and the key remap;
+# the genius-ai SessionStart hook runs `dictate-setup start` again, so F5 works once Claude
+# is opened in this folder. Logs and state: voice/run.
+set -u
+export PATH="${0:A:h:h}/tools/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"   # project tools first (voice/bin/install)
+voice="${0:A:h:h}"
+build="$voice/build"
+run="$voice/run"
+label=genius-ai.voice.hotkey
+uid=$(id -u)
+quiet=0; [[ ${2:-} == --quiet ]] && quiet=1
+say_() { (( quiet )) || echo "$@"; }
+MAP='{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0xC000000CF,"HIDKeyboardModifierMappingDst":0x700000068}]}'
+
+loaded()  { launchctl list "$label" >/dev/null 2>&1; }
+running() { launchctl list "$label" 2>/dev/null | grep -q '"PID"'; }          # loaded AND a live process
+last_exit() { launchctl print "gui/$uid/$label" 2>/dev/null | awk -F' = ' '/last exit code/{print $2; exit}'; }
+# Why a loaded job has no process. 78 (EX_CONFIG) before the first log line = launchd could not
+# open a file of the job; under ~/Desktop, ~/Documents, ~/Downloads macOS privacy (TCC) is the
+# usual cause. The log is kept outside (see step 3); the binary itself needs Full Disk Access.
+why_down() {
+  local code=$(last_exit)
+  echo "   launchd: job loaded, no process; last exit: ${code:-unknown}"
+  if [[ $code == 78* && $voice == ($HOME/Desktop|$HOME/Documents|$HOME/Downloads)/* ]]; then
+    echo "   cause: macOS blocks background jobs from ${voice:h:h:t}. Fix:"
+    echo "     System Settings → Privacy & Security → Full Disk Access → + → ⌘⇧G →"
+    echo "     $build/dictate-hotkey → Open → switch on; then: voice/bin/dictate-setup start"
+  fi
+}
+stop_all() {
+  launchctl bootout "gui/$uid/$label" 2>/dev/null; launchctl remove "$label" 2>/dev/null
+  pkill -f "$voice/lib/stt_server.py" 2>/dev/null
+  hidutil property --set '{"UserKeyMapping":[]}' >/dev/null
+}
+
+case "${1:-start}" in
+stop)
+  stop_all; echo "⏹ F5 listener and Whisper stopped; 🎤 key is the system dictation key again"; exit 0 ;;
+status)
+  echo "key remap:   $(hidutil property --get UserKeyMapping | tr -d '\n ')"
+  if running; then echo "F5 listener: running ($label)"
+  elif loaded; then echo "F5 listener: DOWN"; why_down
+  else echo "F5 listener: not running"; fi
+  echo "Whisper:     $(/usr/bin/python3 "$voice/lib/stt_client.py" --status)"
+  exit 0 ;;
+uninstall)
+  stop_all
+  for old in local.dictate.hotkey local.dictate.keyremap; do
+    launchctl bootout "gui/$uid/$old" 2>/dev/null
+    rm -f "$HOME/Library/LaunchAgents/$old.plist"
+  done
+  echo "✅ stopped; no global dictation agent is left"
+  exit 0 ;;
+start) ;;
+*) echo "usage: dictate-setup [start|stop|status|uninstall]"; exit 2 ;;
+esac
+
+# 0. one F5 per Mac: never take the listener over from another genius-ai copy (FORCE=1 does it on purpose)
+owner=$(launchctl print "gui/$uid/$label" 2>/dev/null | awk '/^\tprogram = /{print $3; exit}')
+if [[ -n $owner && $owner != "$build/dictate-hotkey" && ${FORCE:-0} != 1 ]]; then
+  say_ "ℹ️  F5 belongs to another genius-ai copy: ${owner:h:h:h} — left as is (FORCE=1 voice/bin/dictate-setup start takes it)"
+  exit 0
+fi
+
+# 1. prerequisites: tools on this Mac, Whisper inside the project
+for c in ffmpeg swiftc; do command -v $c >/dev/null || { echo "❌ $c missing — run voice/bin/doctor for the exact fix"; exit 1; }; done
+if [[ ! -f $voice/models/whisper/weights.safetensors ]] || \
+   ! "$voice/.venv/bin/python" -c "import mlx_whisper" 2>/dev/null; then
+  echo "❌ Whisper is not installed in the project: run voice/bin/install --dictation"; exit 1
+fi
+
+# 2. build the listener if it is missing or older than its source
+mkdir -p "$build" "$run"
+if [[ ! -x $build/dictate-hotkey || $voice/lib/hotkey.swift -nt $build/dictate-hotkey ]]; then
+  say_ "🔨 building voice/build/dictate-hotkey"
+  swiftc -O -o "$build/dictate-hotkey" "$voice/lib/hotkey.swift" || exit 1
+  launchctl bootout "gui/$uid/$label" 2>/dev/null; launchctl remove "$label" 2>/dev/null
+  sleep 0.5                                              # a rebuilt binary needs a fresh job
+fi
+
+# 3. 🎤/F5 → F13 (in memory until logout), and the listener
+hidutil property --set "$MAP" >/dev/null
+# The job must be Interactive, as the old global agent was: a `launchctl submit` job runs as a
+# background process, and macOS then hangs its microphone access (ffmpeg never opens the input).
+# The plist lives in voice/run, not in ~/Library/LaunchAgents: bootstrap loads it until logout.
+plist="$run/$label.plist"
+# launchd opens the job's log BEFORE the program runs, as itself — and macOS privacy (TCC) refuses
+# it under ~/Desktop, ~/Documents, ~/Downloads (exit 78, EX_CONFIG, no log line), whatever access
+# the program has. So the log lives in this user's temp dir (cleared at reboot, nothing global);
+# voice/run/hotkey.log is a link to it.
+logdir="${TMPDIR:-/tmp}/genius-ai-voice"; mkdir -p "$logdir"
+log="$logdir/hotkey.log"
+[[ -L $run/hotkey.log || ! -e $run/hotkey.log ]] || mv "$run/hotkey.log" "$run/hotkey.old.log"
+ln -sfn "$log" "$run/hotkey.log"
+if launchctl print "gui/$uid/$label" 2>/dev/null | grep -q "$run/hotkey.log"; then   # old job: log on Desktop
+  launchctl bootout "gui/$uid/$label" 2>/dev/null; launchctl remove "$label" 2>/dev/null; sleep 0.5
+fi
+if launchctl print "gui/$uid/$label" 2>/dev/null | grep -q 'Interactive' && ! running; then
+  launchctl kickstart -k "gui/$uid/$label" 2>/dev/null; sleep 1   # loaded but dead (e.g. after a permission fix)
+fi
+if ! launchctl print "gui/$uid/$label" 2>/dev/null | grep -q 'Interactive'; then
+  launchctl bootout "gui/$uid/$label" 2>/dev/null; launchctl remove "$label" 2>/dev/null; sleep 0.5
+  cat >"$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>$build/dictate-hotkey</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>$log</string>
+  <key>StandardErrorPath</key><string>$log</string>
+</dict></plist>
+PLIST
+  launchctl bootstrap "gui/$uid" "$plist"
+  sleep 1
+fi
+
+# 4. report
+if running; then
+  say_ "✅ F5 (🎤) runs dictate: press, speak, pause 15 s → text appears at the cursor"
+  say_ "   press again while recording to stop early · ⌃⇧5 toggles a screen recording"
+  say_ "   Whisper stays loaded between takes and unloads after 15 min idle"
+else
+  echo "❌ F5 listener did not start:"; why_down; exit 1
+fi

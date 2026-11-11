@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# bin/genius                      start Claude Code in genius-ai with a first prompt (Claude speaks first)
+# bin/genius save <folder>        pack the personal data (config, project rules, state) into a private archive
+# bin/genius restore <archive>    unpack a save into this folder and bind it here (--force keeps the old data in backup/)
+# bin/genius new                  clean start: move the personal data to backup/<date>/ (nothing deleted)
+# bin/genius adopt                «this is my install»: bind a moved/copied config to this folder and Mac
+# bin/genius where                show where the config was made and where it runs now
+cd "$(dirname "$0")/.." || exit 1
+case "${1:-}" in
+  save|restore|new|adopt|where) exec /usr/bin/python3 bin/lib/install.py "$@" ;;
+  *) exec claude "Почни сесію genius-ai" "$@" ;;
+esac

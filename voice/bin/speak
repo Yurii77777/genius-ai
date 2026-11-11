@@ -1,0 +1,76 @@
+#!/bin/zsh
+# speak — the one voice of all Claude Code tabs; tabs never talk over each other.
+#   speak [--from SESSION] "text"     queue it (a newer text of the same SESSION replaces the older)
+#   speak stop [SESSION]              stop that session's speech; without SESSION — everything
+#   speak off | on                    spoken replies off / on
+#   speak status-off | status-on      spoken work statuses off / on
+#   speak voice                       show the voice settings
+#   speak voice female | male         switch every language to the female / male voice
+#   speak voice set LANG GENDER NAME  e.g. speak voice set uk male "Михайло Тишин"
+#   speak test                        say a test line in every language with the current voices
+#   speak restart                     reload tts-server (after editing its code)
+# Settings: voice/voice.json + genius.config.json. Engines: StyleTTS2 (uk), Kokoro (en) from voice/models.
+# The server starts on demand (~30 s load; the first reply waits for it) and unloads after 15 min idle.
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+self="${0:A}"                       # real path, also when called through a symlink
+lib="${self:h:h}/lib"
+dir="${lib:h}/run"                  # runtime state: socket, logs (inside the project)
+sock="$dir/tts.sock"
+cfg() { /usr/bin/python3 "$lib/voice_config.py" "$@"; }
+mkdir -p "$dir"
+
+server_up() { [[ -S $sock ]] && print -n "" | nc -U -w 1 "$sock" 2>/dev/null; }
+server_send() { print -r -- "$1" | nc -U -w 2 "$sock" >/dev/null 2>&1; }
+
+voice="${lib:h}"
+start_server() {
+  pgrep -f 'tts_server.py' >/dev/null && return 0
+  # everything from the project: voice/.venv and voice/models (filled by voice/bin/install), offline;
+  # HF_HOME inside the project, so no library writes a cache outside it
+  [[ -x $voice/.venv/bin/python && -f $voice/models/styletts2-uk/pytorch_model.bin ]] || return 1
+  HF_HUB_OFFLINE=1 HF_HOME="$voice/models/.hf" STANZA_RESOURCES_DIR="$voice/models/stanza" \
+    nohup "$voice/.venv/bin/python" "$lib/tts_server.py" >"$dir/tts.log" 2>&1 &!
+}
+
+case "${1:-}" in
+  stop)       server_up && server_send "STOP ${2:-*}"; exit 0 ;;
+  off)        server_up && server_send "STOP *"; cfg flag enabled off >/dev/null; echo "🔇 spoken replies off"; exit 0 ;;
+  on)         rm -f "$dir/speak.off"; cfg flag enabled on >/dev/null; echo "🔊 spoken replies on"; exit 0 ;;
+  status-off) cfg flag status off >/dev/null; echo "🤫 work statuses off"; exit 0 ;;
+  status-on)  rm -f "$dir/status.off"; cfg flag status on >/dev/null; echo "💬 work statuses on"; exit 0 ;;
+  voice)
+    case "${2:-}" in
+      female|male) cfg gender "$2" ;;
+      set)         cfg set "$3" "$4" "$5" ;;
+      *)           cfg show ;;
+    esac
+    exit 0 ;;
+  test)
+    "$self" --from test "Привіт! Так звучить мій поточний голос."
+    sleep 0.3
+    "$self" --from test2 "Hello! This is how my current voice sounds."
+    exit 0 ;;
+  restart)    pkill -f 'tts_server.py'; sleep 1; start_server && echo "♻️  tts-server restarting"; exit 0 ;;
+  status)
+    cfg show
+    server_up && echo "🗣  tts-server: loaded" || echo "💤 tts-server: not loaded"
+    exit 0 ;;
+esac
+
+session=terminal
+[[ ${1:-} == --from ]] && { session=$2; shift 2; }
+text=${*:-$(cat)}
+[[ -z ${text//[[:space:]]/} ]] && exit 0
+msg="SAY $session"$'\t'"${text//$'\n'/\\n}"
+
+if server_up; then
+  server_send "$msg"
+  exit 0
+fi
+# not loaded yet: start it and hand the text over once it listens (detached, up to 90 s),
+# so even the first reply joins the shared queue instead of talking over another tab
+start_server || exit 0        # no voice installed: stay silent, the text is on the screen
+(
+  for _ in {1..180}; do server_up && { server_send "$msg"; exit 0; }; sleep 0.5; done
+) >/dev/null 2>&1 &!

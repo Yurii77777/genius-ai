@@ -1,0 +1,29 @@
+#!/bin/zsh
+# launchd starts us with no locale: without UTF-8, pbcopy/pbpaste mangle Cyrillic as Mac Roman
+export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
+# screenrec — one key toggles a screen recording WITH the microphone.
+#   first press:  starts recording the whole screen + default mic (+ clicks, cursor)
+#   second press: stops and saves ~/Movies/rec-YYYY-MM-DD_HH-MM-SS.mov
+# Bound to ⌃⇧5 by dictate-hotkey (dictate-setup).
+pidfile="${0:A:h:h}/run/screenrec.pid"   # shared by the terminal and the hotkey
+mkdir -p "${pidfile:h}"
+note() { osascript -e "display notification \"$1\" with title \"Screen recording\"" >/dev/null 2>&1; }
+
+if [[ -f $pidfile ]] && pid=$(<"$pidfile") && kill -0 "$pid" 2>/dev/null; then
+  file=$(<"$pidfile.file")
+  kill -INT "$pid"                          # screencapture finalises the .mov on SIGINT
+  for _ in {1..25}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.2; done
+  rm -f "$pidfile" "$pidfile.file"
+  note "⏹ Збережено: ${file:t}"
+  echo "⏹ $file"
+  exit 0
+fi
+
+mkdir -p "$HOME/Movies"
+file="$HOME/Movies/rec-$(date +%Y-%m-%d_%H-%M-%S).mov"
+screencapture -v -g -k -C "$file" </dev/null >/dev/null 2>&1 &!
+pid=$!
+print -r -- "$pid" >"$pidfile"
+print -r -- "$file" >"$pidfile.file"
+note "⏺ Запис з мікрофоном — натисніть ще раз, щоб зупинити"
+echo "⏺ запис → $file (ще раз screenrec — стоп)"

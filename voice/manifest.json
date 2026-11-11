@@ -1,0 +1,111 @@
+{
+  "comment": "What each language needs. Models are public on Hugging Face (no account, no token). Revisions are pinned; sizes in bytes are approximate.",
+  "languages": {
+    "uk": {
+      "name": "Українська",
+      "components": [
+        "env",
+        "styletts2-uk",
+        "stanza-uk"
+      ]
+    },
+    "en": {
+      "name": "English",
+      "components": [
+        "env",
+        "kokoro-en"
+      ]
+    }
+  },
+  "optional": {
+    "dictation": {
+      "components": [
+        "whisper"
+      ],
+      "comment": "voice input, one model for every language"
+    }
+  },
+  "components": {
+    "env": {
+      "kind": "venv",
+      "path": "voice/.venv",
+      "size": 1100000000,
+      "comment": "Python 3.12 + torch, built locally by uv from voice/requirements.lock"
+    },
+    "styletts2-uk": {
+      "kind": "hf",
+      "repo": "patriotyk/styletts2_ukrainian_multispeaker_hifigan",
+      "revision": "dcca8ce02382d91d95123c93f8b01bc90fe17cfc",
+      "files": [
+        "pytorch_model.bin",
+        "config.yml"
+      ],
+      "size": 766000000,
+      "license": "MIT",
+      "ram": 1600000000,
+      "aliases": [
+        "patriotyk/styletts2_ukrainian_multispeaker"
+      ]
+    },
+    "stanza-uk": {
+      "kind": "stanza",
+      "lang": "uk",
+      "processors": "tokenize,pos,mwt",
+      "size": 188000000,
+      "license": "Apache-2.0",
+      "comment": "word stress for Ukrainian (ukrainian-word-stress uses stanza)"
+    },
+    "kokoro-en": {
+      "kind": "hf",
+      "repo": "hexgrad/Kokoro-82M",
+      "revision": "f3ff3571791e39611d31c381e3a41a3af07b4987",
+      "files": [
+        "config.json",
+        "kokoro-v1_0.pth"
+      ],
+      "size": 327000000,
+      "license": "Apache-2.0",
+      "ram": 800000000
+    },
+    "whisper": {
+      "kind": "hf",
+      "repo": "mlx-community/whisper-large-v3-turbo",
+      "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+      "files": [
+        "config.json",
+        "weights.safetensors"
+      ],
+      "size": 1610000000,
+      "license": "MIT (OpenAI Whisper)",
+      "ram": 2000000000,
+      "requires": "arm64"
+    },
+    "styletts2-voices": {
+      "kind": "hf-space",
+      "repo": "patriotyk/styletts2-ukrainian",
+      "revision": "a292a2841d995cc6efc62f9d22fa8459d62c784f",
+      "size": 5000,
+      "license": "MIT (voices of real people: ask before commercial use)",
+      "comment": "speaker vectors, only the voices named in voice/voice.json"
+    }
+  },
+  "tools": {
+    "comment": "Command-line tools installed into voice/tools/bin by voice/bin/install. Pinned version + sha256. ffmpeg is NOT here: it is a system requirement that doctor detects and asks the user to install.",
+    "uv": {
+      "version": "0.13.7",
+      "license": "MIT/Apache-2.0",
+      "builds": {
+        "arm64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-aarch64-apple-darwin.tar.gz",
+          "sha256": "81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731",
+          "member": "uv-aarch64-apple-darwin/uv"
+        },
+        "x86_64": {
+          "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-apple-darwin.tar.gz",
+          "sha256": "20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7",
+          "member": "uv-x86_64-apple-darwin/uv"
+        }
+      }
+    }
+  }
+}

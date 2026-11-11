@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+voice/.venv/
+voice/models/
+voice/run/
+voice/build/
+voice/legacy/
+voice/tools/
+state/
+# personal data of this user — never in the product repo (AGENTS.md «Product and personal data»)
+genius.config.json
+projects/*
+!projects/_template/
+backup/
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
