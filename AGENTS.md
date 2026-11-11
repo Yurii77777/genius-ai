@@ -136,7 +136,7 @@ A longer message that only mentions sound passes through. Dictation (F5) works a
 ### Dictation (F5)
 
 - F5 (🎤) starts recording; F5 again stops it at once. ⌃⇧5 toggles a screen recording.
-- A take ends after 1.5 s of quiet after speech, or after 15 s with no speech.
+- A take ends after 3 s of quiet after speech, or after 15 s with no speech.
 - Whisper large-v3-turbo runs in `voice/lib/stt_server.py`. It stays loaded between takes and unloads after 15 min idle.
 - The SessionStart hook runs `voice/bin/dictate-setup start`. After a reboot F5 works once Claude is opened in this folder.
 - `voice/bin/dictate-setup status | stop`.

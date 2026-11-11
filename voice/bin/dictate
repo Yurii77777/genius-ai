@@ -7,7 +7,7 @@ export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 #   dictate --paste    … paste into the focused window and press Enter (F5 does this;
 #                      DICTATE_SEND=0 pastes without sending)
 #   dictate uk|en      force a language instead of detecting it
-# The take ends after DICTATE_PAUSE s of quiet after speech (default 1.5, as before the move), after DICTATE_WAIT s
+# The take ends after DICTATE_PAUSE s of quiet after speech (default 3: at 1.5 s a thinking pause cut the take short), after DICTATE_WAIT s
 # when nothing is said at all (default 15), on a second F5 press, or on Enter in a terminal;
 # hard cap DICTATE_MAX s (default 600).
 # Whisper large-v3-turbo runs in stt-server (voice/lib/stt_server.py): it stays loaded between
@@ -40,7 +40,7 @@ trap 'stop=1' USR1
 sound() { [[ ${DICTATE_SOUND:-0} == 1 ]] && afplay "/System/Library/Sounds/$1.aiff" 2>/dev/null & }
 note() { (( paste )) && osascript -e "display notification \"$1\" with title \"Dictate\"" >/dev/null 2>&1 & }
 
-pause="${DICTATE_PAUSE:-1.5}"           # seconds of quiet after speech that end the take
+pause="${DICTATE_PAUSE:-3}"             # seconds of quiet after speech that end the take
 wait_s="${DICTATE_WAIT:-15}"            # seconds without any speech that end the take
 max_s="${DICTATE_MAX:-600}"             # hard cap of one take
 speech_db="${DICTATE_SPEECH_DB:--36}"   # 100 ms RMS above this is speech (your mic: speech -23…-32,
