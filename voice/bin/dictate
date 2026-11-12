@@ -98,8 +98,12 @@ detected=$(grep '^LANG ' "$tmp/w.log" | tail -1 | cut -d' ' -f2)
 # to send to → the text stays in the clipboard and a notification says so; nothing is lost.
 front=""
 (( paste )) && front=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>/dev/null)
-if (( paste )) && [[ $front == Herdr && ${DICTATE_SEND:-1} == 1 ]]; then
-  target=$(/usr/bin/python3 "$voice/lib/herdr_target.py" 2>/dev/null)
+route=""
+(( paste )) && [[ $front == Herdr ]] && route=$(/usr/bin/python3 "$voice/lib/herdr_target.py" 2>/dev/null)
+target=${route%% *}
+how=${route#* }
+# keyboard in the focused terminal: paste below (Cmd+V joins the user's typed draft)
+if (( paste )) && [[ $front == Herdr && ${DICTATE_SEND:-1} == 1 && $how != paste ]]; then
   if [[ -n $target ]] && hc send "$target" "$text" >/dev/null 2>&1; then
     echo "📨 sent to $target"
   else
@@ -110,6 +114,8 @@ if (( paste )) && [[ $front == Herdr && ${DICTATE_SEND:-1} == 1 ]]; then
 elif (( paste )); then
   # paste through the clipboard (Unicode-safe), then give the old clipboard back
   old=$(pbpaste 2>/dev/null)
+  # in Herdr the input may hold the user's typed draft: a leading space keeps the words apart
+  [[ $how == paste ]] && text=" $text"
   print -rn -- "$text" | pbcopy
   osascript -e 'tell application "System Events" to keystroke "v" using command down' >/dev/null
   sleep 0.3

@@ -138,7 +138,7 @@ A longer message that only mentions sound passes through.
 
 - F5 (🎤) starts recording; F5 again stops it at once. ⌃⇧5 toggles a screen recording.
 - A take ends after 3 s of quiet after speech, or after 15 s with no speech.
-- With Herdr in front, the text goes straight into the focused pane's terminal (`hc send`, `voice/lib/herdr_target.py`), not by Cmd+V; with no terminal to send to, it stays in the clipboard and a notification says so (the user's decision of 2026-11-12).
+- With Herdr in front and the keyboard in the focused terminal (no overlay), the text is pasted with Cmd+V and joins what the user already typed in the input; when a panel or overlay holds the keyboard, it goes to the focused pane's terminal with `hc send` (`voice/lib/herdr_target.py`); with no terminal at all, it stays in the clipboard and a notification says so (the user's decisions of 2026-11-12).
 - Whisper large-v3-turbo runs in `voice/lib/stt_server.py`. It stays loaded between takes and unloads after 15 min idle.
 - tts-server reloads itself in place after 5 min of quiet when it grew past 1 GB (`SPEAK_REFRESH_IDLE`, `SPEAK_REFRESH_MB`): replies grow it from ~0.6 GB to ~3.8 GB in an hour; same pid, so `speak` waits for it and never starts a second one (the user's decision of 2026-11-12).
 - The SessionStart hook runs `voice/bin/dictate-setup start`. After a reboot F5 works once Claude is opened in this folder.

@@ -4,7 +4,8 @@ Pasting with Cmd+V goes wherever the keyboard focus is; in Herdr that can be a p
 over the tab, and the text was lost without a trace. Instead the dictation is sent straight into
 the terminal of the focused pane (`hc send`), whatever holds the keyboard.
 
-Prints the terminal's address (t2, t1v…) and exits 0, or prints nothing and exits 1 when there is
+Prints the terminal's address (t2, t1v…) and how to deliver (`paste` when the keyboard is in that
+terminal, `send` otherwise) and exits 0, or prints nothing and exits 1 when there is
 no terminal to send to (the focused pane is a mod, Herdr does not answer). Read-only.
 """
 import json
@@ -31,12 +32,17 @@ def main():
         status = herdr("status")
         if not status:
             return 1
-        target = terminal_of(status.get("focused_pane"), herdr("ls")) or status.get("agent")
+        focused = terminal_of(status.get("focused_pane"), herdr("ls"))
+        target = focused or status.get("agent")
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return 1
     if not target:
         return 1
-    print(target)
+    # "paste": the keyboard is in the focused pane's terminal (no overlay, no floating window),
+    # so Cmd+V lands in its input and joins what the user already typed there (2026-11-12:
+    # `hc send` waited for that draft and sent the dictation apart from it).
+    clear = focused is not None and not status.get("overlays") and not status.get("floats")
+    print(f"{target} {'paste' if clear else 'send'}")
     return 0
 
 
