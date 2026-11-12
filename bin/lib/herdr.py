@@ -3,6 +3,7 @@
     bin/genius herdr install [--show]   copy the mods, write the layout `genius`, check it; --show switches to it
     bin/genius herdr uninstall          back to the layout `main`, remove the mod and the layout
     bin/genius herdr status             what is installed
+    bin/genius herdr sync               install again only when herdr/ or Herdr's main layout changed (SessionStart hook)
 
 Herdr reads mods and layouts only from its own folder (~/.config/herdr-app, or $HERDR_APP_HOME).
 The code lives here, in herdr/; install copies it there (Herdr's hot reload does not see through
@@ -138,6 +139,29 @@ def uninstall():
     return 0
 
 
+def stale():
+    """Our copy in Herdr differs from herdr/, or Herdr's main layout is newer than the layout genius."""
+    for name in MODS:
+        src = os.path.join(ROOT, "herdr", name)
+        for f in os.listdir(src):
+            try:
+                with open(os.path.join(src, f), "rb") as a, open(os.path.join(mod_dir(name), f), "rb") as b:
+                    if a.read() != b.read():
+                        return True
+            except OSError:
+                return True
+    try:
+        return os.path.getmtime(os.path.join(HERDR, "layouts", "main.json")) > os.path.getmtime(LAYOUT)
+    except OSError:
+        return True
+
+
+def sync():
+    if not all(ours_mod(n) for n in MODS[:1]) or not stale():       # only where the panel is already installed
+        return 0
+    return install(False)
+
+
 def status():
     print(f"Herdr folder: {HERDR}" + ("" if os.path.isdir(HERDR) else "  (not found)"))
     for name in MODS:
@@ -154,4 +178,6 @@ if __name__ == "__main__":
         sys.exit(uninstall())
     if cmd == "status":
         sys.exit(status())
+    if cmd == "sync":
+        sys.exit(sync())
     sys.exit("usage: bin/genius herdr install [--show] | uninstall | status")

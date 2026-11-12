@@ -103,7 +103,7 @@ def project_state(p, services, ops):
           "ops": [o["what"] for o in mine],
           # for the Herdr panel: "needs": "user" marks an operation that waits for the user's own action
           "ops_detail": [{"id": o.get("id", ""), "what": o["what"], "waiting_for": o.get("waiting_for", ""),
-                          "next": o.get("next", ""), "needs_user": o.get("needs") == "user",
+                          "next": o.get("next", ""), "started": o.get("started", ""), "needs_user": o.get("needs") == "user",
                           "paused": bool(o.get("paused"))} for o in mine]}
 
     def problem(text, url=""):

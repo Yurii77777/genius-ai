@@ -1,7 +1,9 @@
 // genius-footer — Herdr's status bar (machine, branch, agents) plus live CPU and RAM of this Mac.
 // Herdr's own workspace-status is read-only, so this is our copy of it; the layout `genius` shows it.
 // CPU: iostat over 1 s (user + system). RAM: vm_stat (active + wired + compressed) of hw.memsize,
-// the same as Activity Monitor's "Memory Used". Every 5 s; redraws only when a number changes.
+// the same as Activity Monitor's "Memory Used". Its color is macOS's memory pressure, not the amount:
+// a Mac with a loaded model is full and fine, so red means the system really is short (level 4),
+// amber a warning (2). Every 5 s; redraws only when a number changes.
 // macOS only: elsewhere the two numbers are simply not shown.
 // From the genius-ai folder named in root.json (written by the installer), every 5 s too:
 //   voice  🔊/🔇 from genius.config.json → voice.enabled; a click runs voice/bin/speak on | off
@@ -12,17 +14,19 @@ import { h_flex } from "gpui-base";
 import { spaces, agents, theme, run, window, keys, exec, readTextFile, appHome } from "herdr";
 
 const EVERY = 5000;
-const PROBE = "iostat -n 0 -c 2 -w 1 | tail -1; vm_stat; sysctl -n hw.memsize";
+const PROBE = "iostat -n 0 -c 2 -w 1 | tail -1; vm_stat; sysctl -n kern.memorystatus_vm_pressure_level hw.memsize";
 
 function parse(out) {
   const lines = out.split("\n");
   const cpu = lines[0].trim().split(/\s+/).map(Number);           // us sy id 1m 5m 15m
   const page = Number(/page size of (\d+)/.exec(out)?.[1] ?? 16384);
   const pages = (name) => Number(new RegExp(`${name}:\\s+(\\d+)`).exec(out)?.[1] ?? 0);
-  const total = Number(lines.filter(Boolean).pop());
+  const tail = lines.filter(Boolean);
+  const total = Number(tail.pop());
+  const pressure = Number(tail.pop());                              // 1 normal, 2 warning, 4 critical
   const used = (pages("Pages active") + pages("Pages wired down") + pages("Pages occupied by compressor")) * page;
   if (!(cpu.length >= 3) || !total) return null;
-  return { cpu: Math.round(cpu[0] + cpu[1]), used: used / 2 ** 30, total: total / 2 ** 30 };
+  return { cpu: Math.round(cpu[0] + cpu[1]), used: used / 2 ** 30, total: total / 2 ** 30, pressure };
 }
 
 export default class GeniusFooter extends View {
@@ -40,7 +44,7 @@ export default class GeniusFooter extends View {
       try {
         const r = await exec("sh", ["-c", PROBE], { timeout: 10000 });
         const s = r.code === 0 ? parse(r.stdout) : null;
-        const key = s && `${s.cpu}|${s.used.toFixed(1)}`;
+        const key = s && `${s.cpu}|${s.used.toFixed(1)}|${s.pressure}`;
         if (key !== this.key) { this.key = key; this.stats = s; cx.notify(); }
       } catch { /* leave the last numbers */ }
     });
@@ -113,10 +117,11 @@ export default class GeniusFooter extends View {
     const s = this.stats;
     const level = (pct) => (pct >= 90 ? t.blocked : pct >= 75 ? t.working : t.muted);
     const label = (icon, text) => h_flex().gap(6).items_center().child(svg(`mods/workspace-chrome/${icon}.svg`).size(13)).child(text);
-    const meter = (id, name, pct, text) => h_flex().id(id).gap(6).items_center()
+    const meter = (id, name, pct, text, color = level(pct)) => h_flex().id(id).gap(6).items_center()
       .child(div().text_color(t.dim).child(name))
-      .child(div().w(36).h(5).rounded(3).bg(t.raised).child(div().h_full().rounded(3).w(Math.max(2, 36 * Math.min(pct, 100) / 100)).bg(level(pct))))
-      .child(div().text_color(level(pct)).child(text));
+      .child(div().w(36).h(5).rounded(3).bg(t.raised).child(div().h_full().rounded(3).w(Math.max(2, 36 * Math.min(pct, 100) / 100)).bg(color)))
+      .child(div().text_color(color).child(text));
+    const pressure = s?.pressure >= 4 ? t.blocked : s?.pressure >= 2 ? t.working : t.muted;
     return h_flex().size_full().px(14).gap(16).items_center().bg(t.chrome).border_t(1).border_color(t.border).text_size(11.8).text_color(t.muted)
       .child(label(space?.machine ? "server" : "monitor", space?.machine ?? "This computer"))
       .when(Boolean(space?.branch), (el) => el.child(label("branch", space.branch)))
@@ -131,7 +136,7 @@ export default class GeniusFooter extends View {
         .on_click((_e, cx) => this.toggleVoice(cx)).child(this.voiceBusy ? "⏳" : this.genius.voice ? "🔊" : "🔇")))
       .when(Boolean(s), (el) => el
         .child(meter("cpu", "CPU", s.cpu, `${s.cpu}%`))
-        .child(meter("ram", "RAM", 100 * s.used / s.total, `${s.used.toFixed(1)}/${Math.round(s.total)} GB`)))
+        .child(meter("ram", "RAM", 100 * s.used / s.total, `${s.used.toFixed(1)}/${Math.round(s.total)} GB`, pressure)))
       .child(div().id("palette").text_color(t.dim).on_click(() => run("app.palette")).child(this.hint()));
   }
 }

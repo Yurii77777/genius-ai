@@ -131,6 +131,10 @@ LIVE_PROMPT = ("[genius-ai live control] Run `bin/status` in this folder and the
 def herdr_panel() -> bool:
     """The genius-ai status shelves are installed in Herdr for this folder (bin/genius herdr install)."""
     herdr = Path(os.environ.get("HERDR_APP_HOME") or Path.home() / ".config" / "herdr-app")
+    try:                                   # keep the installed copy current: herdr/ or Herdr's layout changed
+        subprocess.run(["/usr/bin/python3", str(ROOT / "bin/lib/herdr.py"), "sync"], capture_output=True, timeout=30)
+    except Exception:
+        pass
     try:
         return json.loads((herdr / "mods" / "genius-status" / "root.json").read_text()).get("root") == str(ROOT)
     except (OSError, ValueError):

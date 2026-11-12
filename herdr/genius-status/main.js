@@ -14,8 +14,8 @@
 // something changes (a new problem, a problem gone, a new wait for the user, a release window
 // opened). ↻ on any shelf refreshes now. Quiet when all is well: a paused project is dimmed and
 // never raises attention or a toast.
-// Read-only for projects and services. The only write is a question typed into the genius-ai
-// chat when the user presses 💬 on an operation.
+// Read-only for projects and services. Its only writes: a question typed into the genius-ai chat
+// when the user presses 💬 on an operation, and ⏸/▶ on a card (bin/genius pause | resume).
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -30,6 +30,7 @@ const WORDS = {
         waits: "чекає", next: "далі", you: "чекає тебе", paused: "пауза", release_open: "реліз можна", release_closed: "реліз",
         ask: "💬 запитати в чаті", ask_text: "Розкажи про операцію", no_chat: "чат genius-ai не знайдено в Herdr",
         agent_asks: "агент чекає твоєї відповіді", to_agent: "відкрити термінал агента",
+        pause: "поставити на паузу", resume: "зняти з паузи", d: "д",
         fixed: "виправлено", window_open: "вікно релізу відкрите", open_space: "відкрити простір", new_space: "створити простір" },
   en: { requests: "Requests", no_requests: "no requests", agent_done: "finished — see the result",
         attention: "Attention", projects: "Projects", ops: "Operations", ok: "✅ all quiet", none: "nothing is waiting",
@@ -37,12 +38,14 @@ const WORDS = {
         waits: "waiting for", next: "next", you: "waits for you", paused: "paused", release_open: "release open", release_closed: "release",
         ask: "💬 ask in the chat", ask_text: "Tell me about the operation", no_chat: "the genius-ai chat is not in Herdr",
         agent_asks: "the agent waits for your answer", to_agent: "open the agent's terminal",
+        pause: "pause the project", resume: "resume the project", d: "d",
         fixed: "fixed", window_open: "release window is open", open_space: "open the space", new_space: "make a space" },
 };
 
 const hhmm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const inside = (dir, path) => Boolean(dir) && (dir === path || dir.startsWith(path + "/"));
-const short = (name) => name.split(" · ").pop();                       // "🌐 LW · сайт" → "сайт"
+const short = (name) => name.split(" · ").pop();
+const days = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : null; };                       // "🌐 LW · сайт" → "сайт"
 const openUrl = (url) => { if (url) exec("open", [url]); };
 
 // The space that works in this project: a terminal of it in the project's folder, else its own folder.
@@ -137,6 +140,14 @@ export default class GeniusStatus extends View {
       }
       setShared(KEY, { ...next, busy: 0 });
       cx.notify();
+    });
+  }
+
+  // ⏸/▶ on a card: the same command as in the chat, then a fresh read.
+  pause(s, cx) {
+    cx.spawn(async (cx) => {
+      try { await exec(`${this.root}/bin/genius`, [s.paused ? "resume" : "pause", s.name], { cwd: this.root, timeout: 20000 }); } catch { /* the next read shows it */ }
+      this.refresh(cx);
     });
   }
 
@@ -242,7 +253,10 @@ export default class GeniusStatus extends View {
           .when(Boolean(s.release), (el) => el.child(div().px(6).rounded(8).text_size(10.5)
             .bg(t.raised).text_color(s.release.open ? t.done : t.dim)
             .child(s.release.open ? `🚀 ${w.release_open}` : `🚫 ${w.release_closed} ${s.release.text}`)))
-          .when(s.paused, (el) => el.child(div().text_size(10.5).text_color(t.dim).child(`⏸ ${w.paused}`)))
+          .when(s.paused, (el) => el.child(div().text_size(10.5).text_color(t.dim).child(w.paused)))
+          .child(div().id(`pause-${s.name}`).px(4).rounded(4).text_size(11).text_color(t.dim).cursor_pointer()
+            .hover((st) => st.bg(t.raised).text_color(t.foreground)).tooltip(s.paused ? w.resume : w.pause)
+            .on_click((_e, cx) => { cx.stop_propagation(); this.pause(s, cx); }).child(s.paused ? "▶" : "⏸"))
           .when(!s.paused, (el) => el.child(dot(s.problems.length ? t.blocked : t.done))))
         .when(!s.paused && s.info.length > 0, (el) => el.child(h_flex().flex_wrap().gap_x(8).gap_y(2).children(
           s.info.map((x, i) => chip(`i-${s.name}-${i}`, x, t.muted, x.startsWith("PR ") ? s.links?.prs : null)))))
@@ -288,10 +302,13 @@ export default class GeniusStatus extends View {
         const key = `${s.name}/${o.id}`;
         const full = Boolean(this.open[key]);
         const mark = o.paused ? "⏸" : o.needs_user ? "👤" : "⏳";
+        const age = days(o.started);                                   // an old operation must catch the eye
         return v_flex().id(`o-${key}`).pl(30).pr(12).py(5).gap(2).border_t(1).border_color(t.border).cursor_pointer()
           .when(o.paused || s.paused, (el) => el.opacity(s.paused ? 0.4 : 0.6)).hover((st) => st.bg(t.hover))
           .on_click((_e, cx) => { this.open[key] = !full; cx.notify(); })
-          .child(div().text_size(12).text_color(t.foreground).when(!full, (el) => el.truncate()).child(`${mark} ${o.what}`))
+          .child(h_flex().gap(8)
+            .child(div().flex_1().min_w(0).text_size(12).text_color(t.foreground).when(!full, (el) => el.truncate()).child(`${mark} ${o.what}`))
+            .when(age != null && age >= 1, (el) => el.child(div().flex_none().text_size(11).text_color(age >= 3 ? t.working : t.dim).child(`${age} ${w.d}`))))
           .when(Boolean(o.waiting_for), (el) => el.child(div().text_size(11).text_color(o.needs_user && !o.paused ? t.working : t.dim)
             .when(!full, (e2) => e2.truncate()).child(`${w.waits}: ${o.waiting_for}`)))
           .when(full && Boolean(o.next), (el) => el.child(div().text_size(11).text_color(t.muted).child(`${w.next}: ${o.next}`)))
