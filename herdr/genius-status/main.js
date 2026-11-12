@@ -85,7 +85,8 @@ function changes(before, after, w) {
     const was = old.get(s.name);
     if (!was || s.paused) continue;
     s.problems.forEach((p, i) => { if (!was.problems.includes(p)) out.push({ title: `${s.tag} · ${p}`, level: "error", url: s.problem_urls?.[i] }); });
-    was.problems.forEach((p) => { if (!s.problems.includes(p)) out.push({ title: `${s.tag} · ${w.fixed}`, body: p, level: "success" }); });
+    // a problem that became known (an operation now covers it) is not fixed: no toast
+    was.problems.forEach((p) => { if (!s.problems.includes(p) && !(s.known ?? []).includes(p)) out.push({ title: `${s.tag} · ${w.fixed}`, body: p, level: "success" }); });
     const known = new Set((was.ops_detail ?? []).filter((o) => o.needs_user).map((o) => o.id));
     for (const o of s.ops_detail ?? []) {
       if (o.needs_user && !o.paused && !known.has(o.id)) out.push({ title: `${s.tag} · ${w.you}`, body: o.waiting_for || o.what, level: "warning" });
