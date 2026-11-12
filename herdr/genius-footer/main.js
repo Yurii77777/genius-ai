@@ -59,11 +59,25 @@ export default class GeniusFooter extends View {
     });
   }
 
+  // On: the voice server and Whisper load at once; ⏳ stays until the voice server answers (≈30 s),
+  // so the click never looks hung. Off: everything of the voice stops at once.
   toggleVoice(cx) {
+    if (this.voiceBusy) return;
     const on = this.genius.voice;
+    const speak = `${this.root}/voice/bin/speak`;
+    this.voiceBusy = true;
+    cx.notify();
     cx.spawn(async (cx) => {
-      try { await exec(`${this.root}/voice/bin/speak`, [on ? "off" : "on"], { cwd: this.root, timeout: 60000 }); } catch { /* shown by the next read */ }
+      try {
+        await exec(speak, [on ? "off" : "on"], { cwd: this.root, timeout: 60000 });
+        for (let i = 0; !on && i < 30; i++) {
+          const r = await exec("sh", ["-c", `sleep 3; "${speak}" status`], { cwd: this.root, timeout: 20000 });
+          if (r.stdout.includes("tts-server: loaded")) break;
+        }
+      } catch { /* shown by the next read */ }
+      this.voiceBusy = false;
       this.readGenius(cx);
+      cx.notify();
     });
   }
 
@@ -114,7 +128,7 @@ export default class GeniusFooter extends View {
         .hover((st) => st.bg(t.hover)).text_color(this.genius.voice ? t.foreground : t.dim)
         .tooltip(this.genius.uk ? (this.genius.voice ? "голос і диктування увімкнено — клік вимикає" : "голос і диктування вимкнено — клік вмикає")
                                 : (this.genius.voice ? "voice and dictation on — click turns them off" : "voice and dictation off — click turns them on"))
-        .on_click((_e, cx) => this.toggleVoice(cx)).child(this.genius.voice ? "🔊" : "🔇")))
+        .on_click((_e, cx) => this.toggleVoice(cx)).child(this.voiceBusy ? "⏳" : this.genius.voice ? "🔊" : "🔇")))
       .when(Boolean(s), (el) => el
         .child(meter("cpu", "CPU", s.cpu, `${s.cpu}%`))
         .child(meter("ram", "RAM", 100 * s.used / s.total, `${s.used.toFixed(1)}/${Math.round(s.total)} GB`)))

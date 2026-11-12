@@ -131,7 +131,7 @@ The UserPromptSubmit hook (`voice/lib/sound_command.py`) catches a message that 
 - off: «sound off», «вимкни звук», «виключи голос», «звук вимкни», …
 
 It runs `voice/bin/speak on | off` (spoken replies and work statuses together), blocks the message, and shows the answer at once.
-Sound off is full silence both ways (the user's decision of 2026-11-12): `speak off` stops tts-server, Whisper and the F5 listener; `speak "text"` stays silent and never starts the server; the SessionStart hook does not start F5. `speak on` brings the voice and F5 back.
+Sound off is full silence both ways (the user's decision of 2026-11-12): `speak off` stops tts-server, Whisper and the F5 listener; `speak "text"` stays silent and never starts the server; the SessionStart hook does not start F5. `speak on` brings the voice and F5 back and loads tts-server and Whisper at once, so nothing looks hung.
 A longer message that only mentions sound passes through.
 
 ### Dictation (F5)
