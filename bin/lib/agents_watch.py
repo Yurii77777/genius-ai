@@ -15,6 +15,7 @@ For each sub-agent (a Herdr terminal with a parent) one pass does this:
   gets one line, so it reads the report. Once per turn of the agent.
 - A permission or trust dialog → the same alert, never an answer.
 - The agent works, and its screen did not change for HUNG_AFTER s → one alert «hung».
+- An API error (the Mac slept mid-answer) → it is told once per turn to continue.
 - The agent works again or is gone → its watch operation is closed.
 """
 import hashlib
@@ -35,6 +36,8 @@ EVERY = 30
 SEND_AFTER = 60
 WAIT_AFTER = 120
 HUNG_AFTER = 15 * 60
+RESUME = ("The previous answer broke off (API error, e.g. the Mac slept). Continue the task from where you "
+          "stopped: first check the branch, the tests and the running processes.")
 
 WORDS = {
     "uk": {"waits": "агент {n} чекає на вашу відповідь або закінчив", "hung": "агент {n} не рухається {m} хвилин",
@@ -170,6 +173,13 @@ def watch():
                 alert(t, W["hung"].format(n=name, m=HUNG_AFTER // 60), spoken, cfg)
             elif now - s.get("changed", now) <= HUNG_AFTER:
                 s.pop("hung", None)
+            continue
+
+        # An API error (the Mac slept mid-answer, a dropped connection): resume once per turn.
+        if status == "error" and re.search(r"API Error|went to sleep", tail) and s.get("resumed") != t.get("turn"):
+            s["resumed"] = t.get("turn")
+            sh(["hc", "send", name, RESUME], timeout=60)
+            print(f"{datetime.now().isoformat(timespec='seconds')} resumed {name} after an API error")
             continue
 
         if draft is None and re.search(r"Do you want|trust this folder|❯\s*\d+\.\s", tail):
