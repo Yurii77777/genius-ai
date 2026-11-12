@@ -270,7 +270,7 @@ The user's decision of 2026-11-09: «якщо не впевнені — то н�
 - Do only what the user asked. Do not add features, UI, texts, or data that nobody asked for.
 - When a requirement is unclear, or you must guess (product behaviour, wording, legal, prices, which library), stop and ask one exact question.
 - Never replace a tool or library that the user named. If it cannot do the job, say why and ask.
-- Every brief to a subagent includes these three rules, in its own words.
+- Every brief to a subagent includes these three rules, in its own words, and «stop what you start» (see «Resources»).
 - When an agent reports a decision it made on its own, bring it to the user as a question, not as done work.
 
 ## Product and personal data
@@ -316,6 +316,15 @@ The user's decision of 2026-11-06: every project and service in the config is li
 - Herdr (optional): `bin/genius herdr install [--show]` adds the layout `genius`, Herdr's `main` with a right column of three shelves: attention (the workflow: problems and waits for the user), projects, operations (mod `herdr/genius-status`, data from `bin/status --json`), a shelf «Requests» in the left sidebar (agents and sub-agents that wait for an answer or have finished, live from Herdr), and a status bar with live CPU and RAM, Claude's model, context and usage limits, and a 🔊/🔇 switch (mod `herdr/genius-footer`). The panel is quiet when all is well: it shows problems and waits for the user, and posts a Herdr toast when something changes. Claude's numbers come from the status line command `bin/lib/statusline.py`, which saves them (`state/claude-status.json`, and `state/claude/<folder>.json` per session folder) and prints nothing. The footer shows the model and context of the active space's session; the usage limits are the account's. `.claude/settings.json` sets it for this folder; `bin/genius herdr claude on` sets it in the user's own `~/.claude/settings.json` for every session (never over an existing status line; ask the user first). Install copies the code into Herdr's folder; run it again after a change in `herdr/`. The SessionStart hook runs `bin/genius herdr sync`, which installs again only when `herdr/` or Herdr's `main` layout changed. Never restart Herdr (the user's decision of 2026-11-12). `uninstall` removes it.
 - Pause: `bin/genius pause <name|tag>` and `resume` (the ⏸/▶ on a card of the Herdr panel runs the same). A paused project is not checked, not reported, and dimmed on the panel.
 - Never check TLS loosely: an untrusted certificate is reported as such; it is info only when the service has `"expect": "untrusted-cert"`.
+
+## Resources: stop what nobody uses
+
+The user's decision of 2026-11-12: this Mac runs every project at once; nothing idle may hold memory or CPU.
+
+- A dev stack, database container, dev server, browser or proxy that nobody uses right now is stopped at once: after the live check, the viewing, the merge or the test it was started for. Use `docker compose stop` (never `down --volumes`), and stop orphaned dev servers and proxies too.
+- Whoever starts it stops it: you, and every agent you start. Every brief to an agent says so («stop what you start»).
+- Before starting a stack, check `docker ps`: reuse or wait for one that runs, never start a second copy.
+- At each live-control pass, look for leftovers (`docker ps`, orphaned node/astro/playwright processes) and stop what nothing uses.
 
 ## Visible sub-agents in Herdr
 
