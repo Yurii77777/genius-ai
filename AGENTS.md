@@ -311,14 +311,14 @@ The user's decision of 2026-11-06: every project and service in the config is li
 - At the start of a session, and every 15 minutes while it is open, run `bin/status` and the `check` of each pending operation (a session cron job; it expires after 7 days — create it again).
 - A change (a run finished or failed, a URL down, an operation advanced, an agent finished) is reported at once, with the project tag; then do the next step that the user already approved.
 - With the Herdr panel installed (see below), the status lives there: never end a reply with status lines (the user's decision of 2026-11-12). Without it, every reply ends, before the 🔊 line, with one status line per project from `bin/status --line`, also for projects we did not talk about.
-- Herdr (optional): `bin/genius herdr install [--show]` adds the layout `genius`, Herdr's `main` with a right column of three shelves: attention, projects, operations (mod `herdr/genius-status`, data from `bin/status --json`), and a status bar with live CPU and RAM (mod `herdr/genius-footer`). Install copies the code into Herdr's folder; run it again after a change in `herdr/`. Never restart Herdr (the user's decision of 2026-11-12). `uninstall` removes it.
+- Herdr (optional): `bin/genius herdr install [--show]` adds the layout `genius`, Herdr's `main` with a right column of three shelves: attention, projects, operations (mod `herdr/genius-status`, data from `bin/status --json`), and a status bar with live CPU and RAM, Claude's model, context and usage limits, and a 🔊/🔇 switch (mod `herdr/genius-footer`). The panel is quiet when all is well: it shows problems and waits for the user, and posts a Herdr toast when something changes. Claude's numbers come from the status line command `bin/lib/statusline.py` (`.claude/settings.json`), which saves them to `state/claude-status.json` and prints nothing. Install copies the code into Herdr's folder; run it again after a change in `herdr/`. Never restart Herdr (the user's decision of 2026-11-12). `uninstall` removes it.
 - Never check TLS loosely: an untrusted certificate is reported as such; it is info only when the service has `"expect": "untrusted-cert"`.
 
 ## Pending operations
 
 A long operation must survive the end of a session.
 
-- When you start an operation that waits (CI, a release, a deploy, a subagent, a nightly job), add it to `state/operations.json`: `{ "id", "project", "what", "waiting_for", "check", "next", "started" }`. `check` is a read-only command that shows its current state.
+- When you start an operation that waits (CI, a release, a deploy, a subagent, a nightly job), add it to `state/operations.json`: `{ "id", "project", "what", "waiting_for", "check", "next", "started" }`. `check` is a read-only command that shows its current state. Add `"needs": "user"` when it waits for the user's own action (a decision, a token, a manual step): the Herdr panel shows only these under «Attention». `"paused"`: the user paused it.
 - When it ends, remove it (or update `waiting_for` and `next`).
 - The SessionStart hook injects the list first. In the first reply: report each one, run its `check`, then continue or close it.
 - When the user ends the day («завтра продовжимо»): pause what waits for the user, write `state/handoff.md` (what is done, what is paused, what is next, per project). The SessionStart hook injects it first.
@@ -331,6 +331,7 @@ The user's decision of 2026-11-06. With many projects, the user must hear only w
 ### Label of a project
 
 - Each project has a label in `projects/<name>/project.json`: `{ "tag": "🌐 LW", "spoken": "Сайт" }`. Not in the config.
+- Optional there: `"release": { "after": "19:00", "before": "23:00", "tz": "Europe/Kyiv" }`, only when the project's documents state a release window (the panel shows «release open / closed»); `"paused": {...}` while the user paused the project (dimmed, silent).
 - Choose the label when you connect the project; the user can change it.
 
 ### Text

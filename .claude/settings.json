@@ -50,5 +50,9 @@
         ]
       }
     ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/bin/lib/statusline.py\" 2>/dev/null || true"
   }
 }

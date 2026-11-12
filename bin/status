@@ -12,15 +12,18 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WORDS = {
     "uk": {"branch": "гілка", "dirty": "незбережено", "running": "іде", "missing": "шляху немає",
-           "no_answer": "немає відповіді", "cert": "сертифікат не довірений"},
+           "no_answer": "немає відповіді", "cert": "сертифікат не довірений",
+           "after": "після", "before": "до"},
     "en": {"branch": "branch", "dirty": "uncommitted", "running": "running", "missing": "path missing",
-           "no_answer": "no answer", "cert": "certificate not trusted"},
+           "no_answer": "no answer", "cert": "certificate not trusted",
+           "after": "after", "before": "before"},
 }
 W = WORDS["en"]
 
@@ -71,13 +74,42 @@ def gh_env(repo, services):
     return None
 
 
+def release_window(rule):
+    """`"release": {"after": "19:00", "before": "23:00", "tz": "Europe/Kyiv"}` in project.json → open now or not."""
+    if not isinstance(rule, dict) or not (rule.get("after") or rule.get("before")):
+        return None
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(rule["tz"])) if rule.get("tz") else datetime.now()
+    except Exception:
+        now = datetime.now()
+    hm = now.strftime("%H:%M")
+    after, before = rule.get("after", "00:00"), rule.get("before", "24:00")
+    text = " ".join(x for x in (rule.get("after") and f"{W['after']} {after}", rule.get("before") and f"{W['before']} {before}") if x)
+    return {"open": after <= hm < before, "text": text}
+
+
 def project_state(p, services, ops):
     name, path = p["name"], os.path.expanduser(p["path"])
     meta = read_json(os.path.join(ROOT, "projects", name, "project.json"), {})
+    mine = [o for o in ops if o.get("project") == name]
     st = {"name": name, "path": path, "tag": meta.get("tag", name), "spoken": meta.get("spoken", name),
-          "priority": meta.get("priority"), "problems": [], "info": [], "ops": [], "waiting": []}
+          "priority": meta.get("priority"), "paused": bool(meta.get("paused")),
+          "release": release_window(meta.get("release")),
+          "problems": [], "problem_urls": [], "info": [], "links": {}, "urls": [],
+          "ops": [o["what"] for o in mine],
+          # for the Herdr panel: "needs": "user" marks an operation that waits for the user's own action
+          "ops_detail": [{"id": o.get("id", ""), "what": o["what"], "waiting_for": o.get("waiting_for", ""),
+                          "next": o.get("next", ""), "needs_user": o.get("needs") == "user",
+                          "paused": bool(o.get("paused"))} for o in mine]}
+
+    def problem(text, url=""):
+        st["problems"].append(text)
+        st["problem_urls"].append(url)
+
     if not os.path.isdir(path):
-        st["problems"].append(f"{W['missing']}: {p['path']}")
+        problem(f"{W['missing']}: {p['path']}")
         return st
     branch = sh("git", "-C", path, "branch", "--show-current")
     dirty = sh("git", "-C", path, "status", "--porcelain")
@@ -93,6 +125,8 @@ def project_state(p, services, ops):
     repo = repo.split("github.com")[-1].lstrip(":/") if "github.com" in repo else ""
     if repo:
         env = gh_env(repo, services)
+        st["links"] = {"repo": f"https://github.com/{repo}", "prs": f"https://github.com/{repo}/pulls",
+                       "runs": f"https://github.com/{repo}/actions"}
         prs = sh("gh", "pr", "list", "--repo", repo, "--json", "number", "-q", "length", env=env)
         if prs:
             st["info"].append(f"PR {prs}")
@@ -101,21 +135,26 @@ def project_state(p, services, ops):
         if running:
             st["info"].append(f"{W['running']}: {running}")
         last = sh("gh", "run", "list", "--repo", repo, "--branch", "main", "--limit", "1", "--json",
-                  "name,conclusion", "-q", ".[0] | \"\\(.name) \\(.conclusion)\"", env=env)
+                  "name,conclusion,url", "-q", ".[0] | \"\\(.name) \\(.conclusion)\\t\\(.url)\"", env=env)
+        last, _, run_url = last.partition("\t")
         if last.endswith(" failure"):
-            st["problems"].append(f"main: {last}")
+            problem(f"main: {last}", run_url)
     for s in services:
         if s.get("project") == name and s.get("type") == "url":
+            started = time.time()
             code = url_check(s["url"])
+            ms = int((time.time() - started) * 1000)
+            expected_cert = code == "cert" and s.get("expect") == "untrusted-cert"
+            ok = expected_cert or (code != "cert" and 200 <= code < 400)
+            st["urls"].append({"name": s["name"], "url": s["url"], "ok": ok, "code": code, "ms": ms})
             if code == "cert":
                 # expected only while the config says so (a server before its public launch)
-                (st["info"] if s.get("expect") == "untrusted-cert" else st["problems"]).append(
-                    f"{s['name']}: {W['cert']}")
-            elif not (200 <= code < 400):
-                st["problems"].append(f"{s['name']}: HTTP {code or W['no_answer']}")
-    mine = [o for o in ops if o.get("project") == name]
-    st["ops"] = [o["what"] for o in mine]
-    st["waiting"] = [o.get("waiting_for", "") for o in mine]       # parallel to "ops" (the Herdr panel)
+                if expected_cert:
+                    st["info"].append(f"{s['name']}: {W['cert']}")
+                else:
+                    problem(f"{s['name']}: {W['cert']}", s["url"])
+            elif not ok:
+                problem(f"{s['name']}: HTTP {code or W['no_answer']}", s["url"])
     return st
 
 

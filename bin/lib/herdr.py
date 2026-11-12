@@ -93,7 +93,7 @@ def install(show):
     layout["children"] = [c for c in layout.get("children", []) if c.get("id") != COLUMN_ID] + [{
         "id": COLUMN_ID, "type": "column", "size": {"px": 340}, "min": 220, "max": 640,
         "background": "canvas", "padding": 8, "gap": 8,
-        "children": [shelf("attention", {"weight": 1}), shelf("projects", {"weight": 3}), shelf("ops", {"weight": 2})],
+        "children": [shelf("attention", {"weight": 2}), shelf("projects", {"weight": 4}), shelf("ops", {"weight": 2})],
     }]
     footer = find(layout, "status")
     if footer and footer.get("content", {}).get("mod") == "workspace-status":
