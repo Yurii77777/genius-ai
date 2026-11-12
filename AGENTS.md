@@ -314,6 +314,21 @@ The user's decision of 2026-11-06: every project and service in the config is li
 - Herdr (optional): `bin/genius herdr install [--show]` adds the layout `genius`, Herdr's `main` with a right column of three shelves: attention, projects, operations (mod `herdr/genius-status`, data from `bin/status --json`), and a status bar with live CPU and RAM, Claude's model, context and usage limits, and a 🔊/🔇 switch (mod `herdr/genius-footer`). The panel is quiet when all is well: it shows problems and waits for the user, and posts a Herdr toast when something changes. Claude's numbers come from the status line command `bin/lib/statusline.py` (`.claude/settings.json`), which saves them to `state/claude-status.json` and prints nothing. Install copies the code into Herdr's folder; run it again after a change in `herdr/`. Never restart Herdr (the user's decision of 2026-11-12). `uninstall` removes it.
 - Never check TLS loosely: an untrusted certificate is reported as such; it is info only when the service has `"expect": "untrusted-cert"`.
 
+## Visible sub-agents in Herdr
+
+The user's decision of 2026-11-12: the user must see who works. Herdr shows a sub-agent only when it has its own terminal.
+
+- This applies when the session runs in Herdr: `hc ls` works and lists this session.
+- A long task for a project (a feature, a review, a study, a release step) starts as a visible sub-agent:
+  `hc run --bg --json --name <tag>-<task> --cwd <project path> -- claude "<brief>"`.
+  Herdr shows it under this session in «Agents» and in the project's card on the panel.
+- A short lookup (a search, reading a few files) stays an internal subagent.
+- The brief stands alone: the goal, the paths, the project rules to read, and the three rules of «Ask, do not invent».
+- Add it to `state/operations.json` with `"check": "hc get <name> --json"`. Read its screen with `hc read <name>`; wait with `hc wait <name>`.
+- It ends with this session. Add `--outlive-parent` only for work that must survive the session.
+- A sub-agent that asks a question shows as blocked in Herdr. Bring its question to the user; never answer its permission or trust prompt yourself.
+- Without Herdr, use internal subagents as before.
+
 ## Pending operations
 
 A long operation must survive the end of a session.
