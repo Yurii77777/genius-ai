@@ -192,7 +192,7 @@ export default class GeniusStatus extends View {
         .child(text);
       return v_flex().id(`p-${s.name}`).mx(8).my(3).px(10).py(7).gap(4).rounded(6).cursor_pointer()
         .bg(space?.active ? t.selected : t.surface).hover((st) => st.bg(t.hover))
-        .when(s.paused, (el) => el.opacity(0.5))
+        .when(s.paused, (el) => el.opacity(0.4))
         .tooltip(`${s.path} · ${space ? w.open_space : w.new_space}`)
         .on_click(() => space ? run("space.select", { id: space.id }) : run("space.new", { name: s.tag, folder: s.path }))
         .child(h_flex().gap(8).items_center()
@@ -202,21 +202,21 @@ export default class GeniusStatus extends View {
             .bg(t.raised).text_color(s.release.open ? t.done : t.dim)
             .child(s.release.open ? `🚀 ${w.release_open}` : `🚫 ${w.release_closed} ${s.release.text}`)))
           .when(s.paused, (el) => el.child(div().text_size(10.5).text_color(t.dim).child(`⏸ ${w.paused}`)))
-          .child(dot(s.problems.length ? t.blocked : t.done)))
-        .when(s.info.length > 0, (el) => el.child(h_flex().flex_wrap().gap_x(8).gap_y(2).children(
+          .when(!s.paused, (el) => el.child(dot(s.problems.length ? t.blocked : t.done))))
+        .when(!s.paused && s.info.length > 0, (el) => el.child(h_flex().flex_wrap().gap_x(8).gap_y(2).children(
           s.info.map((x, i) => chip(`i-${s.name}-${i}`, x, t.muted, x.startsWith("PR ") ? s.links?.prs : null)))))
         .when((s.urls ?? []).length > 0, (el) => el.child(h_flex().flex_wrap().gap_x(10).gap_y(2).children(
           s.urls.map((u, i) => h_flex().id(`u-${s.name}-${i}`).gap(5).items_center().cursor_pointer()
             .tooltip(`${u.url} · ${u.code} · ${u.ms} ms`).on_click((_e, cx) => { cx.stop_propagation(); openUrl(u.url); })
             .child(dot(u.ok ? t.done : t.blocked))
             .child(div().text_size(11.5).text_color(u.ok ? t.muted : t.blocked).child(`${short(u.name)} ${u.ms} ms`))))))
-        .when(mine.length > 0, (el) => el.child(h_flex().flex_wrap().gap_x(10).gap_y(2).children(
+        .when(!s.paused && mine.length > 0, (el) => el.child(h_flex().flex_wrap().gap_x(10).gap_y(2).children(
           mine.map((a) => h_flex().id(`g-${a.address}`).gap(5).items_center().max_w(220).cursor_pointer()
             .tooltip(`${a.status} · ${a.title}`).on_click((_e, cx) => { cx.stop_propagation(); run("agent.focus", { terminal: a.address }); })
             .child(dot(status[a.status] ?? t.unknown))
             .child(div().min_w(0).truncate().text_size(11.5).text_color(a.status === "blocked" ? t.blocked : t.muted)
               .child(`🤖 ${a.title || a.program?.name || a.address}`))))))
-        .when(ops.length > 0, (el) => el.child(h_flex().gap(10).text_size(11.5)
+        .when(!s.paused && ops.length > 0, (el) => el.child(h_flex().gap(10).text_size(11.5)
           .child(div().text_color(t.working).child(`⏳ ${ops.length}`))
           .when(you > 0, (e2) => e2.child(div().text_color(t.working).child(`👤 ${you}`)))));
     });
@@ -229,10 +229,11 @@ export default class GeniusStatus extends View {
     if (!withOps.length) return [div().px(12).py(8).text_size(12.5).text_color(t.muted).child(w.none)];
     return withOps.flatMap((s) => {
       const list = s.ops_detail;
-      const you = list.filter((o) => o.needs_user && !o.paused).length;
-      const paused = list.filter((o) => o.paused).length;
+      const you = s.paused ? 0 : list.filter((o) => o.needs_user && !o.paused).length;
+      const paused = s.paused ? list.length : list.filter((o) => o.paused).length;
       const unfolded = Boolean(this.open[s.name]);
       const head = h_flex().id(`oh-${s.name}`).px(12).py(6).gap(8).items_center().cursor_pointer().hover((st) => st.bg(t.hover))
+        .when(s.paused, (el) => el.opacity(0.4))
         .on_click((_e, cx) => { this.open[s.name] = !unfolded; cx.notify(); })
         .child(div().w(10).text_size(10).text_color(t.dim).child(unfolded ? "▾" : "▸"))
         .child(div().text_size(12.5).font_semibold().text_color(t.foreground).child(s.tag))
@@ -247,7 +248,7 @@ export default class GeniusStatus extends View {
         const full = Boolean(this.open[key]);
         const mark = o.paused ? "⏸" : o.needs_user ? "👤" : "⏳";
         return v_flex().id(`o-${key}`).pl(30).pr(12).py(5).gap(2).border_t(1).border_color(t.border).cursor_pointer()
-          .when(o.paused, (el) => el.opacity(0.6)).hover((st) => st.bg(t.hover))
+          .when(o.paused || s.paused, (el) => el.opacity(s.paused ? 0.4 : 0.6)).hover((st) => st.bg(t.hover))
           .on_click((_e, cx) => { this.open[key] = !full; cx.notify(); })
           .child(div().text_size(12).text_color(t.foreground).when(!full, (el) => el.truncate()).child(`${mark} ${o.what}`))
           .when(Boolean(o.waiting_for), (el) => el.child(div().text_size(11).text_color(o.needs_user && !o.paused ? t.working : t.dim)
@@ -267,7 +268,8 @@ export default class GeniusStatus extends View {
     const states = data.states ?? [];
     const rows = this.attentionRows(states);
     const count = this.section === "attention" ? rows.problems.length + rows.waits.length
-      : this.section === "ops" ? states.reduce((n, s) => n + (s.ops_detail ?? []).length, 0) : states.length;
+      : this.section === "ops" ? states.reduce((n, s) => n + (s.paused ? 0 : (s.ops_detail ?? []).length), 0)
+      : states.filter((s) => !s.paused).length;                    // paused projects are not counted
     const body = this.root === null ? [div().px(12).py(8).text_size(12).text_color(t.blocked).child(w.noroot)]
       : this.section === "attention" ? this.attention(t, w, rows)
       : this.section === "ops" ? this.ops(t, w, states)

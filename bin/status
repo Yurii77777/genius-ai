@@ -3,7 +3,9 @@
 
     bin/status            one block per project (tag from projects/<name>/project.json), problems first
     bin/status --line     one short line per project (for the end of a reply)
-    bin/status --json     machine-readable
+    bin/status --json     machine-readable (the Herdr panel)
+
+A project with "paused" in its project.json is not checked and not printed; --json keeps it, marked.
 
 Per project: git branch, uncommitted files, ahead/behind upstream, open PRs, failed runs since the
 last success, the running workflows, its URL services, and its pending operations (state/operations.json).
@@ -108,6 +110,8 @@ def project_state(p, services, ops):
         st["problems"].append(text)
         st["problem_urls"].append(url)
 
+    if st["paused"]:                # the user paused it: no git, GitHub or URL checks, no reports
+        return st
     if not os.path.isdir(path):
         problem(f"{W['missing']}: {p['path']}")
         return st
@@ -166,12 +170,14 @@ def main():
     projects, services = cfg.get("projects") or [], cfg.get("services") or []
     with ThreadPoolExecutor(max_workers=4) as pool:
         states = list(pool.map(lambda p: project_state(p, services, ops), projects))
-    states.sort(key=lambda s: (s["priority"] != "core", not s["problems"]))
+    states.sort(key=lambda s: (s["paused"], s["priority"] != "core", not s["problems"]))
     if "--json" in sys.argv:
         json.dump(states, sys.stdout, ensure_ascii=False, indent=2)
         print()
         return
     for s in states:
+        if s["paused"]:             # silent in text; the Herdr panel (--json) shows it dimmed
+            continue
         if "--line" in sys.argv:
             parts = s["problems"] + s["info"][:3] + [f"⏳ {o}" for o in s["ops"][:2]]
             print(f"{s['tag']} · " + " · ".join(parts))
