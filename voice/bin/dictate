@@ -13,7 +13,7 @@ export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 # Whisper large-v3-turbo runs in stt-server (voice/lib/stt_server.py): it stays loaded between
 # takes and unloads after 15 min idle (DICTATE_IDLE). Everything lives in the project:
 # voice/.venv, voice/models/whisper, runtime state in voice/run. Nothing is downloaded at run time.
-export PATH="${0:A:h:h}/tools/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"   # project tools first (voice/bin/install)
+export PATH="${0:A:h:h}/tools/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"   # herdr-app, hc   # project tools first (voice/bin/install)
 voice="${0:A:h:h}"
 run="$voice/run"
 mkdir -p "$run"
@@ -93,7 +93,21 @@ text=$(tr '\n' ' ' < "$tmp/in.txt" | sed 's/  */ /g; s/^ //; s/ $//')
 detected=$(grep '^LANG ' "$tmp/w.log" | tail -1 | cut -d' ' -f2)
 [[ -z $text ]] && { echo "🤐 heard nothing"; note "🤐 Heard nothing"; exit 0; }
 
-if (( paste )); then
+# Herdr in front: send straight into the focused pane's terminal (hc send), never Cmd+V into
+# whatever holds the keyboard — a panel or a peek swallowed the text (2026-11-12). No terminal
+# to send to → the text stays in the clipboard and a notification says so; nothing is lost.
+front=""
+(( paste )) && front=$(osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true' 2>/dev/null)
+if (( paste )) && [[ $front == Herdr && ${DICTATE_SEND:-1} == 1 ]]; then
+  target=$(/usr/bin/python3 "$voice/lib/herdr_target.py" 2>/dev/null)
+  if [[ -n $target ]] && hc send "$target" "$text" >/dev/null 2>&1; then
+    echo "📨 sent to $target"
+  else
+    print -rn -- "$text" | pbcopy
+    note "⚠️ Not sent: paste it yourself (Cmd+V)"
+    echo "⚠️ not sent (target: ${target:-none}), text left in the clipboard"
+  fi
+elif (( paste )); then
   # paste through the clipboard (Unicode-safe), then give the old clipboard back
   old=$(pbpaste 2>/dev/null)
   print -rn -- "$text" | pbcopy
