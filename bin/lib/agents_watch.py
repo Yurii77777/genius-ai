@@ -2,7 +2,7 @@
 «ці всі правила до пизди… потрібен воркер над оцім всім агентами»).
 
     bin/genius agents watch                    one pass (the background job runs it every 30 s)
-    bin/genius agents watch start|stop|status  the background job (launchctl submit, like ops sweep)
+    bin/genius agents watch start|stop|status  the background job (a background loop from the terminal session)
 
 For each sub-agent (a Herdr terminal with a parent) one pass does this:
 
@@ -210,19 +210,41 @@ def watch():
 
 
 def job(action):
-    me = os.path.join(ROOT, "bin", "genius")
-    log = os.path.join(ROOT, "state", "agents-watch.log")
+    loop_job(action, LABEL, ["agents","watch"], EVERY, os.path.join(ROOT, "state", "agents-watch.log"))
+
+
+def loop_job(action, label, args, every, log):
+    """A background loop started from this Mac's terminal session, not by launchd: a launchd job
+    may not read ~/Desktop (macOS privacy: «Operation not permitted»), a child of the terminal may.
+    Its pid is in state/<label>.pid; a reboot ends it and the SessionStart hook starts it again."""
+    import signal
+    pidfile = os.path.join(ROOT, "state", f"{label}.pid")
+    def alive():
+        try:
+            pid = int(open(pidfile).read())
+            os.kill(pid, 0)
+            return pid
+        except Exception:
+            return None
+    subprocess.run(["launchctl", "remove", label], capture_output=True)   # the old launchd job, if any
+    pid = alive()
     if action == "start":
-        subprocess.run(["launchctl", "remove", LABEL], capture_output=True)
-        loop = f'while true; do "{me}" agents watch >> "{log}" 2>&1; sleep {EVERY}; done'
-        subprocess.run(["launchctl", "submit", "-l", LABEL, "--", "/bin/zsh", "-lc", loop], check=True)
-        print(f"started {LABEL}: every {EVERY} s, log state/agents-watch.log")
+        if pid:
+            print(f"{label}: already running (pid {pid})")
+            return
+        me = os.path.join(ROOT, "bin", "genius")
+        cmd = " ".join(f'"{a}"' for a in [me] + args)
+        loop = f'while true; do {cmd} >> "{log}" 2>&1; sleep {every}; done'
+        p = subprocess.Popen(["/bin/zsh", "-c", loop], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, cwd=ROOT)
+        open(pidfile, "w").write(str(p.pid))
+        print(f"started {label}: every {every} s (pid {p.pid}), log {os.path.relpath(log, ROOT)}")
     elif action == "stop":
-        subprocess.run(["launchctl", "remove", LABEL], capture_output=True)
-        print(f"stopped {LABEL}")
+        if pid:
+            os.killpg(pid, signal.SIGTERM)
+        print(f"stopped {label}")
     else:
-        r = subprocess.run(["launchctl", "list", LABEL], capture_output=True, text=True)
-        print("running" if r.returncode == 0 and '"PID"' in r.stdout else "not running")
+        print(f"running (pid {pid})" if pid else "not running")
 
 
 if __name__ == "__main__":

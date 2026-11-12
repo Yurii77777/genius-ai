@@ -9,7 +9,7 @@
                                          (named in `check`) is merged or closed; marks `stale` what waits for
                                          the user with no update for STALE_DAYS days. Never deletes, only
                                          moves to operations.closed.json with the reason.
-    bin/genius ops sweep start|stop|status   the background job (launchctl submit, like the F5 listener)
+    bin/genius ops sweep start|stop|status   the background job (a loop from the terminal session, see loop_job)
 
 `review` never closes, changes or writes anything: the agent reads it, closes only what the check proves
 finished, and asks the user about the rest (AGENTS.md «Pending operations»). Paused operations are listed
@@ -167,20 +167,41 @@ def sweep():
 
 
 def sweep_job(action):
-    uid = os.getuid()
-    me = os.path.join(ROOT, "bin", "genius")
-    log = os.path.join(ROOT, "state", "ops-sweep.log")
+    loop_job(action, SWEEP_LABEL, ["ops","sweep"], SWEEP_EVERY, os.path.join(ROOT, "state", "ops-sweep.log"))
+
+
+def loop_job(action, label, args, every, log):
+    """A background loop started from this Mac's terminal session, not by launchd: a launchd job
+    may not read ~/Desktop (macOS privacy: «Operation not permitted»), a child of the terminal may.
+    Its pid is in state/<label>.pid; a reboot ends it and the SessionStart hook starts it again."""
+    import signal
+    pidfile = os.path.join(ROOT, "state", f"{label}.pid")
+    def alive():
+        try:
+            pid = int(open(pidfile).read())
+            os.kill(pid, 0)
+            return pid
+        except Exception:
+            return None
+    subprocess.run(["launchctl", "remove", label], capture_output=True)   # the old launchd job, if any
+    pid = alive()
     if action == "start":
-        subprocess.run(["launchctl", "remove", SWEEP_LABEL], capture_output=True)
-        loop = f'while true; do "{me}" ops sweep >> "{log}" 2>&1; sleep {SWEEP_EVERY}; done'
-        subprocess.run(["launchctl", "submit", "-l", SWEEP_LABEL, "--", "/bin/zsh", "-lc", loop], check=True)
-        print(f"started {SWEEP_LABEL}: every {SWEEP_EVERY // 60} min, log state/ops-sweep.log")
+        if pid:
+            print(f"{label}: already running (pid {pid})")
+            return
+        me = os.path.join(ROOT, "bin", "genius")
+        cmd = " ".join(f'"{a}"' for a in [me] + args)
+        loop = f'while true; do {cmd} >> "{log}" 2>&1; sleep {every}; done'
+        p = subprocess.Popen(["/bin/zsh", "-c", loop], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True, cwd=ROOT)
+        open(pidfile, "w").write(str(p.pid))
+        print(f"started {label}: every {every} s (pid {p.pid}), log {os.path.relpath(log, ROOT)}")
     elif action == "stop":
-        subprocess.run(["launchctl", "remove", SWEEP_LABEL], capture_output=True)
-        print(f"stopped {SWEEP_LABEL}")
+        if pid:
+            os.killpg(pid, signal.SIGTERM)
+        print(f"stopped {label}")
     else:
-        r = subprocess.run(["launchctl", "list", SWEEP_LABEL], capture_output=True, text=True)
-        print("running" if r.returncode == 0 and '"PID"' in r.stdout else "not running")
+        print(f"running (pid {pid})" if pid else "not running")
 
 
 if __name__ == "__main__":
