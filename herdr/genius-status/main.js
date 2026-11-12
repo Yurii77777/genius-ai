@@ -72,11 +72,19 @@ export default class GeniusStatus extends View {
     });
   }
 
-  header(t, w, data) {
+  // Each shelf has its own color and count: attention red (green when empty), projects accent, operations amber.
+  header(t, w, data, states) {
     const title = w[this.section];
     const when = data.busy ? w.loading : data.at ? `${w.at} ${hhmm(data.at)}` : w.never;
+    const count = this.section === "attention" ? states.reduce((n, s) => n + s.problems.length, 0)
+      : this.section === "ops" ? states.reduce((n, s) => n + s.ops.length, 0) : states.length;
+    const color = this.section === "attention" ? (count ? t.blocked : t.done)
+      : this.section === "ops" ? t.working : t.accent;
     return h_flex().px(12).py(8).gap(8).items_center().border_b(1).border_color(t.border)
-      .child(div().flex_1().text_size(11.5).font_semibold().text_color(t.muted).child(title.toUpperCase()))
+      .child(div().w(3).h(14).rounded(2).bg(color))
+      .child(div().text_size(11.5).font_semibold().text_color(color).child(title.toUpperCase()))
+      .child(div().px(6).rounded(8).bg(t.raised).text_size(11).text_color(t.foreground).child(String(count)))
+      .child(div().flex_1())
       .when(this.section === "projects", (el) => el.child(div().text_size(11).text_color(t.dim).child(when)))
       .child(div().id(`refresh-${this.section}`).px(4).rounded(4).text_size(12).text_color(t.dim).cursor_pointer()
         .hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip(when)
@@ -129,8 +137,8 @@ export default class GeniusStatus extends View {
       : this.section === "attention" ? this.attention(t, w, states)
       : this.section === "ops" ? this.ops(t, w, states)
       : this.projects(t, w, states);
-    return v_flex().size_full().bg(t.chrome)
-      .child(this.header(t, w, data))
+    return v_flex().size_full().rounded(10).bg(t.chrome)
+      .child(this.header(t, w, data, states))
       .when(Boolean(data.error), (el) => el.child(div().px(12).py(4).text_size(11).text_color(t.blocked).child(data.error)))
       .child(v_flex().id(`body-${this.section}`).flex_1().min_h(0).py(4).overflow_y_scrollbar().children(body));
   }

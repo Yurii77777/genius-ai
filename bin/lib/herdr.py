@@ -46,7 +46,8 @@ def ours_layout():
 
 
 def shelf(section, size):
-    return {"id": f"genius-{section}", "type": "block", "size": size,
+    return {"id": f"genius-{section}", "type": "block", "size": size, "radius": 10,
+            "border": {"width": 1, "color": "border"}, "background": "chrome",
             "content": {"mod": "genius-status", "props": {"section": section}}}
 
 
@@ -76,7 +77,7 @@ def install(show):
     layout.pop("preview", None)
     layout["children"] = [c for c in layout.get("children", []) if c.get("id") != COLUMN_ID] + [{
         "id": COLUMN_ID, "type": "column", "size": {"px": 340}, "min": 220, "max": 640,
-        "background": "chrome", "divider": {"width": 1, "color": "border"},
+        "background": "canvas", "padding": 8, "gap": 8,
         "children": [shelf("attention", {"weight": 1}), shelf("projects", {"weight": 3}), shelf("ops", {"weight": 2})],
     }]
     with open(LAYOUT, "w", encoding="utf-8") as f:
