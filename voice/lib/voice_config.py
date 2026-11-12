@@ -64,6 +64,8 @@ def pick(lang, cfg=None):
 if __name__ == "__main__":            # tiny CLI for the `speak` shell script
     import sys
     cmd = sys.argv[1] if len(sys.argv) > 1 else "show"
+    if cmd == "enabled":                              # exit 0 when spoken replies are on
+        sys.exit(0 if load()["enabled"] else 1)
     if cmd == "gender" and len(sys.argv) > 2:
         if sys.argv[2] not in ("female", "male"):
             sys.exit("gender: female | male")

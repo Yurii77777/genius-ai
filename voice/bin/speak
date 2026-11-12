@@ -2,7 +2,7 @@
 # speak — the one voice of all Claude Code tabs; tabs never talk over each other.
 #   speak [--from SESSION] "text"     queue it (a newer text of the same SESSION replaces the older)
 #   speak stop [SESSION]              stop that session's speech; without SESSION — everything
-#   speak off | on                    spoken replies off / on
+#   speak off | on                    spoken replies off (tts-server stopped too) / on
 #   speak status-off | status-on      spoken work statuses off / on
 #   speak voice                       show the voice settings
 #   speak voice female | male         switch every language to the female / male voice
@@ -11,6 +11,7 @@
 #   speak restart                     reload tts-server (after editing its code)
 # Settings: voice/voice.json + genius.config.json. Engines: StyleTTS2 (uk), Kokoro (en) from voice/models.
 # The server starts on demand (~30 s load; the first reply waits for it) and unloads after 15 min idle.
+# Sound off = no server: `speak off` stops it, and a plain `speak "text"` stays silent and never starts it.
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 self="${0:A}"                       # real path, also when called through a symlink
@@ -22,6 +23,7 @@ mkdir -p "$dir"
 
 server_up() { [[ -S $sock ]] && print -n "" | nc -U -w 1 "$sock" 2>/dev/null; }
 server_send() { print -r -- "$1" | nc -U -w 2 "$sock" >/dev/null 2>&1; }
+stop_server() { pkill -f 'tts_server.py' 2>/dev/null; rm -f "$sock"; }
 
 voice="${lib:h}"
 start_server() {
@@ -35,7 +37,7 @@ start_server() {
 
 case "${1:-}" in
   stop)       server_up && server_send "STOP ${2:-*}"; exit 0 ;;
-  off)        server_up && server_send "STOP *"; cfg flag enabled off >/dev/null; echo "🔇 spoken replies off"; exit 0 ;;
+  off)        server_up && server_send "STOP *"; stop_server; cfg flag enabled off >/dev/null; echo "🔇 spoken replies off, tts-server stopped"; exit 0 ;;
   on)         rm -f "$dir/speak.off"; cfg flag enabled on >/dev/null; echo "🔊 spoken replies on"; exit 0 ;;
   status-off) cfg flag status off >/dev/null; echo "🤫 work statuses off"; exit 0 ;;
   status-on)  rm -f "$dir/status.off"; cfg flag status on >/dev/null; echo "💬 work statuses on"; exit 0 ;;
@@ -51,7 +53,7 @@ case "${1:-}" in
     sleep 0.3
     "$self" --from test2 "Hello! This is how my current voice sounds."
     exit 0 ;;
-  restart)    pkill -f 'tts_server.py'; sleep 1; start_server && echo "♻️  tts-server restarting"; exit 0 ;;
+  restart)    stop_server; sleep 1; start_server && echo "♻️  tts-server restarting"; exit 0 ;;
   status)
     cfg show
     server_up && echo "🗣  tts-server: loaded" || echo "💤 tts-server: not loaded"
@@ -62,6 +64,8 @@ session=terminal
 [[ ${1:-} == --from ]] && { session=$2; shift 2; }
 text=${*:-$(cat)}
 [[ -z ${text//[[:space:]]/} ]] && exit 0
+# sound off: stay silent and never start the server (only `speak test` may speak for a check)
+[[ $session == test* ]] || cfg enabled || exit 0
 msg="SAY $session"$'\t'"${text//$'\n'/\\n}"
 
 if server_up; then
