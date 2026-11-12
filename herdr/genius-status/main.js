@@ -65,13 +65,21 @@ function everyAgent() {
   const cwd = new Map(panes().map((p) => [p.pane, p.cwd]));
   const all = terminals();
   const said = new Map(all.map((k) => [k.address, k.report?.msg]));     // what the agent asks, in its own words
-  const top = agents().map((a) => ({ address: a.address, status: a.status, seq: a.seq, sub: false, cwd: cwd.get(a.pane),
+  const top = agents().map((a) => ({ address: a.address, pane: a.pane, status: a.status, seq: a.seq, sub: false, cwd: cwd.get(a.pane),
     where: a.space_name, title: a.title || a.program?.name || a.address, msg: said.get(a.address) }));
   const seen = new Set(top.map((a) => a.address));
   const subs = all.filter((k) => k.parent && k.state === "live" && k.status && !seen.has(k.address))
     .map((k) => ({ address: k.address, status: k.status, seq: 0, sub: true, cwd: k.cwd, where: k.name || k.address,
       title: k.name || k.address, msg: k.report?.msg }));
   return [...top, ...subs];
+}
+
+// Open an agent the way Herdr's own agents list does: an agent with a pane gets that pane focused;
+// a sub-agent (no pane) is peeked over the tab, with keep-as-tab and close. agent.focus only
+// changes an {"agent": "focused"} block, and the layout `genius` has none (2026-11-12).
+function openAgent(a) {
+  if (a.pane) run("pane.focus", { pane: a.pane });
+  else run("terminal.peek", { terminal: a.address });
 }
 
 // The agents and sub-agents that work in this folder.
@@ -167,7 +175,7 @@ export default class GeniusStatus extends View {
     const chat = agentsIn(this.root)[0];
     if (!chat) { notify({ title: w.no_chat, level: "warning" }); return; }
     exec("hc", ["send", chat.address, `${w.ask_text} «${o.what}» (${o.id})`]);
-    run("agent.focus", { terminal: chat.address });
+    openAgent(chat);
   }
 
   // Each shelf has its own color and count: attention red (green when empty), projects accent, operations amber.
@@ -209,7 +217,7 @@ export default class GeniusStatus extends View {
   requests(t, w, rows) {
     if (!rows.length) return [div().px(12).py(8).text_size(12.5).text_color(t.muted).child(w.no_requests)];
     return rows.map((r) => v_flex().id(`r-${r.agent.address}`).px(12).py(5).gap(2).cursor_pointer().hover((s) => s.bg(t.hover))
-      .tooltip(w.to_agent).on_click(() => run("agent.focus", { terminal: r.agent.address }))
+      .tooltip(w.to_agent).on_click(() => openAgent(r.agent))
       .child(h_flex().gap(8).text_size(12.5)
         .child(div().flex_none().text_color(t.foreground).child(r.tag))
         .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(`${r.agent.sub ? "↳ " : ""}🤖 ${r.agent.title}`)))
@@ -271,7 +279,7 @@ export default class GeniusStatus extends View {
             .child(div().text_size(11.5).text_color(u.ok ? t.muted : t.blocked).child(`${short(u.name)} ${u.ms} ms`))))))
         .when(!s.paused && mine.length > 0, (el) => el.child(h_flex().flex_wrap().gap_x(10).gap_y(2).children(
           mine.map((a) => h_flex().id(`g-${a.address}`).gap(5).items_center().max_w(220).cursor_pointer()
-            .tooltip(`${a.status} · ${a.title}`).on_click((_e, cx) => { cx.stop_propagation(); run("agent.focus", { terminal: a.address }); })
+            .tooltip(`${a.status} · ${a.title}`).on_click((_e, cx) => { cx.stop_propagation(); openAgent(a); })
             .child(dot(status[a.status] ?? t.unknown))
             .child(div().min_w(0).truncate().text_size(11.5).text_color(a.status === "blocked" ? t.blocked : t.muted)
               .child(`${a.sub ? "↳ " : ""}🤖 ${a.title}`))))))
