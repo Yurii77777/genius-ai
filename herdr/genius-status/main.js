@@ -19,7 +19,7 @@
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, readTextFile, watchFolder, appHome, spaces, panes, agents, run, theme, shared, setShared, props, notify, nextCommand } from "herdr";
+import { exec, readTextFile, watchFolder, appHome, spaces, panes, agents, terminals, run, theme, shared, setShared, props, notify, nextCommand } from "herdr";
 
 const KEY = "genius.status";
 const EVERY = 5 * 60 * 1000;
@@ -54,11 +54,23 @@ function spaceOf(path) {
   });
 }
 
-// The agents whose terminal is in this folder.
-function agentsIn(path) {
+// Every agent Herdr knows, with its folder: the agents with a pane (agents()) and the sub-agents,
+// which are terminals an agent started with `hc run` and have no pane (terminals() with a parent).
+function everyAgent() {
   const cwd = new Map(panes().map((p) => [p.pane, p.cwd]));
-  return agents().filter((a) => inside(cwd.get(a.pane), path));
+  const all = terminals();
+  const said = new Map(all.map((k) => [k.address, k.report?.msg]));     // what the agent asks, in its own words
+  const top = agents().map((a) => ({ address: a.address, status: a.status, seq: a.seq, sub: false, cwd: cwd.get(a.pane),
+    where: a.space_name, title: a.title || a.program?.name || a.address, msg: said.get(a.address) }));
+  const seen = new Set(top.map((a) => a.address));
+  const subs = all.filter((k) => k.parent && k.state === "live" && k.status && !seen.has(k.address))
+    .map((k) => ({ address: k.address, status: k.status, seq: 0, sub: true, cwd: k.cwd, where: k.name || k.address,
+      title: k.name || k.address, msg: k.report?.msg }));
+  return [...top, ...subs];
 }
+
+// The agents and sub-agents that work in this folder.
+const agentsIn = (path) => everyAgent().filter((a) => inside(a.cwd, path));
 
 // What changed between two reads, as toasts. Paused projects stay silent.
 function changes(before, after, w) {
@@ -172,10 +184,11 @@ export default class GeniusStatus extends View {
   // Requests of agents and sub-agents, live from Herdr: blocked (waits for an answer) first, then
   // done (finished while the user was elsewhere: a result or a question to read).
   requestRows(states) {
-    const cwd = new Map(panes().map((p) => [p.pane, p.cwd]));
+    // A sub-agent's "done" is not news: it reports to its parent, and the parent brings the result.
     const rank = { blocked: 0, done: 1 };
-    return agents().filter((a) => a.status in rank).sort((a, b) => rank[a.status] - rank[b.status] || b.seq - a.seq)
-      .map((a) => ({ agent: a, tag: states.find((s) => inside(cwd.get(a.pane), s.path))?.tag ?? a.space_name }));
+    return everyAgent().filter((a) => a.status === "blocked" || (a.status === "done" && !a.sub))
+      .sort((a, b) => rank[a.status] - rank[b.status] || b.seq - a.seq)
+      .map((a) => ({ agent: a, tag: states.find((s) => inside(a.cwd, s.path))?.tag ?? a.where }));
   }
 
   requests(t, w, rows) {
@@ -184,9 +197,9 @@ export default class GeniusStatus extends View {
       .tooltip(w.to_agent).on_click(() => run("agent.focus", { terminal: r.agent.address }))
       .child(h_flex().gap(8).text_size(12.5)
         .child(div().flex_none().text_color(t.foreground).child(r.tag))
-        .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(`🤖 ${r.agent.title || r.agent.program?.name || r.agent.address}`)))
+        .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(`${r.agent.sub ? "↳ " : ""}🤖 ${r.agent.title}`)))
       .child(div().text_size(11.5).text_color(r.agent.status === "blocked" ? t.blocked : t.done)
-        .child(r.agent.status === "blocked" ? w.agent_asks : w.agent_done)));
+        .child(r.agent.status === "blocked" ? (r.agent.msg || w.agent_asks) : w.agent_done)));
   }
 
   attention(t, w, rows) {
@@ -243,7 +256,7 @@ export default class GeniusStatus extends View {
             .tooltip(`${a.status} · ${a.title}`).on_click((_e, cx) => { cx.stop_propagation(); run("agent.focus", { terminal: a.address }); })
             .child(dot(status[a.status] ?? t.unknown))
             .child(div().min_w(0).truncate().text_size(11.5).text_color(a.status === "blocked" ? t.blocked : t.muted)
-              .child(`🤖 ${a.title || a.program?.name || a.address}`))))))
+              .child(`${a.sub ? "↳ " : ""}🤖 ${a.title}`))))))
         .when(!s.paused && ops.length > 0, (el) => el.child(h_flex().gap(10).text_size(11.5)
           .child(div().text_color(t.working).child(`⏳ ${ops.length}`))
           .when(you > 0, (e2) => e2.child(div().text_color(t.working).child(`👤 ${you}`)))));
