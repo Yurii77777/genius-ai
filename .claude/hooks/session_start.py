@@ -206,6 +206,15 @@ def main() -> None:
         return
     projects = cfg.get("projects") or []
     services = cfg.get("services") or []
+    if cfg.get("onboarded"):
+        # The automatic cleanup of pending operations (the user's decision of 2026-11-12): a
+        # background job every 15 min (`bin/genius ops sweep start`, nothing global); a reboot
+        # clears it and this hook starts it again.
+        try:
+            subprocess.run([str(ROOT / "bin/genius"), "ops", "sweep", "start"],
+                           capture_output=True, text=True, timeout=15)
+        except Exception:
+            pass
 
     language, gender = cfg.get("language"), cfg.get("gender")
     persona = ""

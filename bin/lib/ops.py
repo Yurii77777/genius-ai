@@ -4,6 +4,12 @@
                                          output of its read-only `check`; marks the ones to look at
     bin/genius ops close <id> <why>      move one operation to state/operations.closed.json, with the why
     bin/genius ops touch <id>            record that an operation was looked at today (its `updated`)
+    bin/genius ops sweep                 the automatic cleanup (every 15 min, `ops sweep start`): closes an
+                                         operation whose `done_when` command succeeds, or whose pull request
+                                         (named in `check`) is merged or closed; marks `stale` what waits for
+                                         the user with no update for STALE_DAYS days. Never deletes, only
+                                         moves to operations.closed.json with the reason.
+    bin/genius ops sweep start|stop|status   the background job (launchctl submit, like the F5 listener)
 
 `review` never closes, changes or writes anything: the agent reads it, closes only what the check proves
 finished, and asks the user about the rest (AGENTS.md «Pending operations»). Paused operations are listed
@@ -11,6 +17,7 @@ but not checked. A check runs with a timeout; one that fails or hangs is reporte
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import date, datetime
@@ -99,6 +106,83 @@ def touch(op_id):
     sys.exit(f"no operation «{op_id}»")
 
 
+SWEEP_LABEL = "genius-ai.ops-sweep"
+SWEEP_EVERY = 900
+PR_IN_CHECK = re.compile(r"gh (?:-R \S+ )?pr (?:view|checks) (\d+)(?:.*?-R ([\w.-]+/[\w.-]+))?")
+
+
+def sh(cmd, timeout=45):
+    try:
+        r = subprocess.run(["/bin/zsh", "-lc", cmd], cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout or "").strip()
+    except subprocess.TimeoutExpired:
+        return 124, ""
+
+
+def pr_state(op):
+    """The state of the pull request the operation's check names: MERGED, CLOSED, OPEN or None."""
+    m = PR_IN_CHECK.search(op.get("check", "") or "")
+    if not m:
+        return None, None
+    num, repo = m.group(1), m.group(2)
+    if not repo:
+        r = re.search(r"-R ([\w.-]+/[\w.-]+)", op.get("check", ""))
+        repo = r.group(1) if r else None
+    if not repo:
+        return None, None
+    account = "Yurii-777" if repo.startswith("solidlogictech/") else "Yurii77777"
+    code, out = sh(f'GH_TOKEN=$(gh auth token --user {account}) gh pr view {num} -R {repo} --json state -q .state')
+    return (out or None) if code == 0 else None, f"{repo}#{num}"
+
+
+def sweep():
+    ops = read(OPS, [])
+    closed, marked = [], []
+    for o in list(ops):
+        if o.get("paused"):
+            continue
+        reason = None
+        if o.get("done_when"):
+            code, _ = sh(o["done_when"])
+            if code == 0:
+                reason = f"done_when succeeded: {o['done_when'][:120]}"
+        if reason is None:
+            state, pr = pr_state(o)
+            if state in ("MERGED", "CLOSED"):
+                reason = f"{pr} is {state.lower()}"
+        if reason:
+            close(o["id"], f"auto (ops sweep): {reason}")
+            closed.append(o["id"])
+            continue
+        idle = days_since(o.get("updated") or o.get("started", ""))
+        if o.get("needs") == "user" and idle is not None and idle >= STALE_DAYS and not o.get("stale"):
+            fresh = read(OPS, [])
+            for f in fresh:
+                if f["id"] == o["id"]:
+                    f["stale"] = date.today().isoformat()
+            write(OPS, fresh)
+            marked.append(o["id"])
+    stamp = datetime.now().isoformat(timespec="seconds")
+    print(f"{stamp} sweep: closed {closed or 'none'}; stale {marked or 'none'}")
+
+
+def sweep_job(action):
+    uid = os.getuid()
+    me = os.path.join(ROOT, "bin", "genius")
+    log = os.path.join(ROOT, "state", "ops-sweep.log")
+    if action == "start":
+        subprocess.run(["launchctl", "remove", SWEEP_LABEL], capture_output=True)
+        loop = f'while true; do "{me}" ops sweep >> "{log}" 2>&1; sleep {SWEEP_EVERY}; done'
+        subprocess.run(["launchctl", "submit", "-l", SWEEP_LABEL, "--", "/bin/zsh", "-lc", loop], check=True)
+        print(f"started {SWEEP_LABEL}: every {SWEEP_EVERY // 60} min, log state/ops-sweep.log")
+    elif action == "stop":
+        subprocess.run(["launchctl", "remove", SWEEP_LABEL], capture_output=True)
+        print(f"stopped {SWEEP_LABEL}")
+    else:
+        r = subprocess.run(["launchctl", "list", SWEEP_LABEL], capture_output=True, text=True)
+        print("running" if r.returncode == 0 and '"PID"' in r.stdout else "not running")
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
     if not args or args[0] == "review":
@@ -108,5 +192,9 @@ if __name__ == "__main__":
         close(args[1], " ".join(args[2:]))
     elif args[0] == "touch" and len(args) == 2:
         touch(args[1])
+    elif args[0] == "sweep" and len(args) == 1:
+        sweep()
+    elif args[0] == "sweep" and args[1] in ("start", "stop", "status"):
+        sweep_job(args[1])
     else:
-        sys.exit("usage: bin/genius ops review [--days N] | close <id> <why> | touch <id>")
+        sys.exit("usage: bin/genius ops review [--days N] | close <id> <why> | touch <id> | sweep [start|stop|status]")
