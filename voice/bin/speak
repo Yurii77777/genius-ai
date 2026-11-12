@@ -2,7 +2,7 @@
 # speak — the one voice of all Claude Code tabs; tabs never talk over each other.
 #   speak [--from SESSION] "text"     queue it (a newer text of the same SESSION replaces the older)
 #   speak stop [SESSION]              stop that session's speech; without SESSION — everything
-#   speak off | on                    spoken replies off (tts-server stopped too) / on
+#   speak off | on                    all voice off (tts-server, Whisper, F5 stopped) / on (F5 back)
 #   speak status-off | status-on      spoken work statuses off / on
 #   speak voice                       show the voice settings
 #   speak voice female | male         switch every language to the female / male voice
@@ -11,7 +11,9 @@
 #   speak restart                     reload tts-server (after editing its code)
 # Settings: voice/voice.json + genius.config.json. Engines: StyleTTS2 (uk), Kokoro (en) from voice/models.
 # The server starts on demand (~30 s load; the first reply waits for it) and unloads after 15 min idle.
-# Sound off = no server: `speak off` stops it, and a plain `speak "text"` stays silent and never starts it.
+# Sound off = full silence both ways: `speak off` stops tts-server, Whisper and the F5 listener
+# (voice/bin/dictate-setup stop); a plain `speak "text"` stays silent and never starts the server.
+# `speak on` brings F5 back (dictate-setup start).
 export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 self="${0:A}"                       # real path, also when called through a symlink
@@ -37,8 +39,10 @@ start_server() {
 
 case "${1:-}" in
   stop)       server_up && server_send "STOP ${2:-*}"; exit 0 ;;
-  off)        server_up && server_send "STOP *"; stop_server; cfg flag enabled off >/dev/null; echo "🔇 spoken replies off, tts-server stopped"; exit 0 ;;
-  on)         rm -f "$dir/speak.off"; cfg flag enabled on >/dev/null; echo "🔊 spoken replies on"; exit 0 ;;
+  off)        server_up && server_send "STOP *"; stop_server; "$voice/bin/dictate-setup" stop >/dev/null 2>&1
+              cfg flag enabled off >/dev/null; echo "🔇 voice off: spoken replies, Whisper and F5 stopped"; exit 0 ;;
+  on)         rm -f "$dir/speak.off"; cfg flag enabled on >/dev/null; echo "🔊 spoken replies on"
+              "$voice/bin/dictate-setup" start --quiet >/dev/null 2>&1 && echo "🎤 F5 dictation on"; exit 0 ;;
   status-off) cfg flag status off >/dev/null; echo "🤫 work statuses off"; exit 0 ;;
   status-on)  rm -f "$dir/status.off"; cfg flag status on >/dev/null; echo "💬 work statuses on"; exit 0 ;;
   voice)
