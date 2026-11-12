@@ -23,17 +23,19 @@ import { exec, readTextFile, watchFolder, appHome, spaces, panes, agents, termin
 
 const KEY = "genius.status";
 const EVERY = 5 * 60 * 1000;
+// Section names are always English, like Herdr's own «Spaces» and «Agents»; the content follows the user's language.
+const TITLES = { requests: "Requests", attention: "Attention", projects: "Projects", ops: "Operations" };
 const WORDS = {
-  uk: { requests: "Запити", no_requests: "запитів немає", agent_done: "закінчив — подивись результат",
-        attention: "Увага", projects: "Проєкти", ops: "Операції", ok: "✅ усе спокійно", none: "нічого не чекає",
+  uk: { no_requests: "запитів немає", agent_done: "закінчив — подивись результат",
+        ok: "✅ усе спокійно", none: "нічого не чекає",
         loading: "оновлюю…", never: "ще не оновлено", at: "оновлено", noroot: "не знайдено genius-ai: запустіть bin/genius herdr install",
         waits: "чекає", next: "далі", you: "чекає тебе", paused: "пауза", release_open: "реліз можна", release_closed: "реліз",
         ask: "💬 запитати в чаті", ask_text: "Розкажи про операцію", no_chat: "чат genius-ai не знайдено в Herdr",
         agent_asks: "агент чекає твоєї відповіді", to_agent: "відкрити термінал агента",
         pause: "поставити на паузу", resume: "зняти з паузи", d: "д",
         fixed: "виправлено", window_open: "вікно релізу відкрите", open_space: "відкрити простір", new_space: "створити простір" },
-  en: { requests: "Requests", no_requests: "no requests", agent_done: "finished — see the result",
-        attention: "Attention", projects: "Projects", ops: "Operations", ok: "✅ all quiet", none: "nothing is waiting",
+  en: { no_requests: "no requests", agent_done: "finished — see the result",
+        ok: "✅ all quiet", none: "nothing is waiting",
         loading: "updating…", never: "not updated yet", at: "updated", noroot: "genius-ai not found: run bin/genius herdr install",
         waits: "waiting for", next: "next", you: "waits for you", paused: "paused", release_open: "release open", release_closed: "release",
         ask: "💬 ask in the chat", ask_text: "Tell me about the operation", no_chat: "the genius-ai chat is not in Herdr",
@@ -175,7 +177,7 @@ export default class GeniusStatus extends View {
       : this.section === "ops" ? t.working : t.accent;
     return h_flex().px(12).py(8).gap(8).items_center().border_b(1).border_color(t.border)
       .child(div().w(3).h(14).rounded(2).bg(color))
-      .child(div().text_size(11.5).font_semibold().text_color(color).child(w[this.section].toUpperCase()))
+      .child(div().text_size(11.5).font_semibold().text_color(color).child(TITLES[this.section]))
       .child(div().px(6).rounded(8).bg(t.raised).text_size(11).text_color(t.foreground).child(String(count)))
       .child(div().flex_1())
       .when(this.section === "projects", (el) => el.child(div().text_size(11).text_color(t.dim).child(when)))
