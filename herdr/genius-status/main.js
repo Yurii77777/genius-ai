@@ -198,9 +198,10 @@ export default class GeniusStatus extends View {
   // Requests of agents and sub-agents, live from Herdr: blocked (waits for an answer) first, then
   // done (finished while the user was elsewhere: a result or a question to read).
   requestRows(states) {
-    // A sub-agent's "done" is not news: it reports to its parent, and the parent brings the result.
+    // A sub-agent's "done" is news too: a visible sub-agent (`hc run`) does not report to its
+    // parent by itself, so its result and its questions would wait unseen (2026-11-12).
     const rank = { blocked: 0, done: 1 };
-    return everyAgent().filter((a) => a.status === "blocked" || (a.status === "done" && !a.sub))
+    return everyAgent().filter((a) => a.status === "blocked" || a.status === "done")
       .sort((a, b) => rank[a.status] - rank[b.status] || b.seq - a.seq)
       .map((a) => ({ agent: a, tag: states.find((s) => inside(a.cwd, s.path))?.tag ?? a.where }));
   }
