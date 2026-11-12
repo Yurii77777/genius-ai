@@ -1,8 +1,9 @@
 // genius-status — genius-ai's live status on the Herdr screen: one shelf per section.
 // Installed by `bin/genius herdr install` (copied, not linked: Herdr's hot reload does not see
 // through links). The layout `genius` shows three copies in its right column:
-//   props.section = "attention"  what needs the user now: problems (failed CI, URL down) and the
-//                                operations that wait for the user's own action ("needs": "user")
+//   props.section = "attention"  what needs the user now: agents blocked on a question (live, from
+//                                Herdr), problems (failed CI, URL down) and the operations that wait
+//                                for the user's own action ("needs": "user")
 //   props.section = "projects"   one card per project: branch, PRs, prod URLs, release window, its
 //                                agents, counters; click = its space
 //   props.section = "ops"        pending operations (state/operations.json), folded per project
@@ -25,11 +26,13 @@ const WORDS = {
         loading: "оновлюю…", never: "ще не оновлено", at: "оновлено", noroot: "не знайдено genius-ai: запустіть bin/genius herdr install",
         waits: "чекає", next: "далі", you: "чекає тебе", paused: "пауза", release_open: "реліз можна", release_closed: "реліз",
         ask: "💬 запитати в чаті", ask_text: "Розкажи про операцію", no_chat: "чат genius-ai не знайдено в Herdr",
+        agent_asks: "агент чекає твоєї відповіді", to_agent: "відкрити термінал агента",
         fixed: "виправлено", window_open: "вікно релізу відкрите", open_space: "відкрити простір", new_space: "створити простір" },
   en: { attention: "Attention", projects: "Projects", ops: "Operations", ok: "✅ all quiet", none: "nothing is waiting",
         loading: "updating…", never: "not updated yet", at: "updated", noroot: "genius-ai not found: run bin/genius herdr install",
         waits: "waiting for", next: "next", you: "waits for you", paused: "paused", release_open: "release open", release_closed: "release",
         ask: "💬 ask in the chat", ask_text: "Tell me about the operation", no_chat: "the genius-ai chat is not in Herdr",
+        agent_asks: "the agent waits for your answer", to_agent: "open the agent's terminal",
         fixed: "fixed", window_open: "release window is open", open_space: "open the space", new_space: "make a space" },
 };
 
@@ -158,12 +161,22 @@ export default class GeniusStatus extends View {
     const live = states.filter((s) => !s.paused);
     const problems = live.flatMap((s) => s.problems.map((text, i) => ({ id: `${s.name}-p${i}`, tag: s.tag, text, url: s.problem_urls?.[i] })));
     const waits = live.flatMap((s) => (s.ops_detail ?? []).filter((o) => o.needs_user && !o.paused).map((o) => ({ id: `${s.name}-${o.id}`, tag: s.tag, op: o })));
-    return { problems, waits };
+    // An agent or sub-agent that waits for an answer (a permission, a trust prompt): live from Herdr.
+    const cwd = new Map(panes().map((p) => [p.pane, p.cwd]));
+    const blocked = agents().filter((a) => a.status === "blocked").map((a) => ({
+      agent: a, tag: states.find((s) => inside(cwd.get(a.pane), s.path))?.tag ?? a.space_name }));
+    return { blocked, problems, waits };
   }
 
   attention(t, w, rows) {
-    if (!rows.problems.length && !rows.waits.length) return [div().px(12).py(8).text_size(12.5).text_color(t.muted).child(w.ok)];
+    if (!rows.blocked.length && !rows.problems.length && !rows.waits.length) return [div().px(12).py(8).text_size(12.5).text_color(t.muted).child(w.ok)];
     return [
+      ...rows.blocked.map((r) => v_flex().id(`a-b-${r.agent.address}`).px(12).py(5).gap(2).cursor_pointer().hover((s) => s.bg(t.hover))
+        .tooltip(w.to_agent).on_click(() => run("agent.focus", { terminal: r.agent.address }))
+        .child(h_flex().gap(8).text_size(12.5)
+          .child(div().flex_none().text_color(t.foreground).child(r.tag))
+          .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(`🤖 ${r.agent.title || r.agent.program?.name || r.agent.address}`)))
+        .child(div().text_size(11.5).text_color(t.blocked).child(w.agent_asks))),
       ...rows.problems.map((r) => h_flex().id(`a-${r.id}`).px(12).py(5).gap(8).text_size(12.5)
         .when(Boolean(r.url), (el) => el.cursor_pointer().hover((s) => s.bg(t.hover)).tooltip(r.url).on_click(() => openUrl(r.url)))
         .child(div().flex_none().text_color(t.foreground).child(r.tag))
@@ -267,7 +280,7 @@ export default class GeniusStatus extends View {
     const data = shared(KEY) ?? {};
     const states = data.states ?? [];
     const rows = this.attentionRows(states);
-    const count = this.section === "attention" ? rows.problems.length + rows.waits.length
+    const count = this.section === "attention" ? rows.blocked.length + rows.problems.length + rows.waits.length
       : this.section === "ops" ? states.reduce((n, s) => n + (s.paused ? 0 : (s.ops_detail ?? []).length), 0)
       : states.filter((s) => !s.paused).length;                    // paused projects are not counted
     const body = this.root === null ? [div().px(12).py(8).text_size(12).text_color(t.blocked).child(w.noroot)]

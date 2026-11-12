@@ -327,6 +327,7 @@ The user's decision of 2026-11-12: the user must see who works. Herdr shows a su
 - Add it to `state/operations.json` with `"check": "hc get <name> --json"`. Read its screen with `hc read <name>`; wait with `hc wait <name>`.
 - It ends with this session. Add `--outlive-parent` only for work that must survive the session.
 - A sub-agent that asks a question shows as blocked in Herdr. Bring its question to the user; never answer its permission or trust prompt yourself.
+- Start it only in a folder that Claude Code already trusts (a project's path). In a new folder it stops at the trust prompt, and Herdr shows no status for it: the panel stays silent. After every start, check `hc get <name> --json`; with `"status": null`, read its screen and tell the user what it waits for.
 - Without Herdr, use internal subagents as before.
 
 ## Pending operations
