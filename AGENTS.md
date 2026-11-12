@@ -344,6 +344,7 @@ The user's decision of 2026-11-12: the user must see who works. Herdr shows a su
 - It ends with this session. Add `--outlive-parent` only for work that must survive the session.
 - A sub-agent that asks a question shows as blocked in Herdr. Bring its question to the user; never answer its permission or trust prompt yourself.
 - Start it only in a folder that Claude Code already trusts (a project's path). In a new folder it stops at the trust prompt, and Herdr shows no status for it: the panel stays silent. After every start, check `hc get <name> --json`; with `"status": null`, read its screen and tell the user what it waits for.
+- The watcher does this by script, not by memory (the user's decision of 2026-11-12: «правила — це дроч, потрібен воркер»): `bin/genius agents watch` runs every 30 s (`agents watch start`; the SessionStart hook starts it). For each sub-agent: text in its input unchanged for 60 s is the user's own answer → it presses Enter; an agent idle 2 min → its last message to `state/agents/<name>.md`, an operation `watch-<name>` with `"needs": "user"`, the voice, and one `[agents-watch]` line to this session; a permission or trust dialog → the same alert, never an answer; a screen unchanged 15 min while working → «hung». A `[agents-watch]` line in this session: read the saved report, tell the user, then act (save and stop, or pass the user's answer).
 - Without Herdr, use internal subagents as before.
 
 ## Pending operations

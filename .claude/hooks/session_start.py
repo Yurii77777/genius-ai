@@ -215,6 +215,13 @@ def main() -> None:
                            capture_output=True, text=True, timeout=15)
         except Exception:
             pass
+        # The sub-agent watcher (the user's decision of 2026-11-12): every 30 s, sends the user's
+        # own typed answer that waits in an agent's input, alerts when an agent waits or hangs.
+        try:
+            subprocess.run([str(ROOT / "bin/genius"), "agents", "watch", "start"],
+                           capture_output=True, text=True, timeout=15)
+        except Exception:
+            pass
 
     language, gender = cfg.get("language"), cfg.get("gender")
     persona = ""
