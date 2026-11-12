@@ -125,7 +125,10 @@ def pending_operations() -> str:
 
 LIVE_PROMPT = ("[genius-ai live control] Run `bin/status` in this folder and the `check` of every entry in "
                "state/operations.json; compare with the last state you reported; report changes first with the "
-               "project tag and do the next approved step (AGENTS.md «Live control of all projects»).")
+               "project tag and do the next approved step (AGENTS.md «Live control of all projects»). "
+               "Once a day, and at the first pass of a session: `bin/genius ops review`, then close only what a "
+               "check proves finished (`bin/genius ops close <id> <why>`) and ask the user in one list about the "
+               "stale rest (AGENTS.md «Pending operations»).")
 
 
 def herdr_panel() -> bool:
