@@ -97,7 +97,7 @@ def project_state(p, services, ops):
     meta = read_json(os.path.join(ROOT, "projects", name, "project.json"), {})
     mine = [o for o in ops if o.get("project") == name]
     st = {"name": name, "path": path, "tag": meta.get("tag", name), "spoken": meta.get("spoken", name),
-          "priority": meta.get("priority"), "paused": bool(meta.get("paused")),
+          "priority": meta.get("priority"), "rank": meta.get("rank"), "paused": bool(meta.get("paused")),
           "release": release_window(meta.get("release")),
           "problems": [], "problem_urls": [], "known": [], "info": [], "links": {}, "urls": [],
           "ops": [o["what"] for o in mine],
@@ -196,7 +196,11 @@ def main():
     projects, services = cfg.get("projects") or [], cfg.get("services") or []
     with ThreadPoolExecutor(max_workers=4) as pool:
         states = list(pool.map(lambda p: project_state(p, services, ops), projects))
-    states.sort(key=lambda s: (s["paused"], s["priority"] != "core", not s["problems"]))
+    # `rank` in projects/<name>/project.json sets the order the user wants (1 first; the user's
+    # decision of 2026-11-12: the focus project comes first in Attention and on the panel);
+    # without it, the core project first, then the rest.
+    states.sort(key=lambda s: (s["paused"], s["rank"] if s["rank"] is not None else 99,
+                               s["priority"] != "core", not s["problems"]))
     if "--json" in sys.argv:
         json.dump(states, sys.stdout, ensure_ascii=False, indent=2)
         print()
