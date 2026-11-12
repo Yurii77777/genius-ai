@@ -74,8 +74,8 @@ def gh_env(repo, services):
 def project_state(p, services, ops):
     name, path = p["name"], os.path.expanduser(p["path"])
     meta = read_json(os.path.join(ROOT, "projects", name, "project.json"), {})
-    st = {"name": name, "tag": meta.get("tag", name), "spoken": meta.get("spoken", name),
-          "priority": meta.get("priority"), "problems": [], "info": []}
+    st = {"name": name, "path": path, "tag": meta.get("tag", name), "spoken": meta.get("spoken", name),
+          "priority": meta.get("priority"), "problems": [], "info": [], "ops": [], "waiting": []}
     if not os.path.isdir(path):
         st["problems"].append(f"{W['missing']}: {p['path']}")
         return st
@@ -113,7 +113,9 @@ def project_state(p, services, ops):
                     f"{s['name']}: {W['cert']}")
             elif not (200 <= code < 400):
                 st["problems"].append(f"{s['name']}: HTTP {code or W['no_answer']}")
-    st["ops"] = [o["what"] for o in ops if o.get("project") == name]
+    mine = [o for o in ops if o.get("project") == name]
+    st["ops"] = [o["what"] for o in mine]
+    st["waiting"] = [o.get("waiting_for", "") for o in mine]       # parallel to "ops" (the Herdr panel)
     return st
 
 

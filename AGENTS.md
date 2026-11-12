@@ -277,7 +277,7 @@ The user's decision of 2026-11-06: a clone of genius-ai is clean. It holds only 
 
 | product (in git) | personal (gitignored, created on this computer) |
 |---|---|
-| `AGENTS.md`, `CLAUDE.md`, `.claude/`, `bin/`, `persona/`, `voice/bin`, `voice/lib`, `voice/sounds`, `voice/*.json`, `projects/_template/` | `genius.config.json`, `projects/<name>/`, `state/`, `backup/`, `voice/.venv`, `voice/models`, `voice/run`, `voice/build`, `voice/legacy`, `voice/tools` |
+| `AGENTS.md`, `CLAUDE.md`, `.claude/`, `bin/`, `herdr/`, `persona/`, `voice/bin`, `voice/lib`, `voice/sounds`, `voice/*.json`, `projects/_template/` | `genius.config.json`, `projects/<name>/`, `state/`, `backup/`, `voice/.venv`, `voice/models`, `voice/run`, `voice/build`, `voice/legacy`, `voice/tools` |
 
 - Never write a name, login, host, IP, e-mail, or project fact into a product file. Use placeholders (`<gh-login>`, `~/path/to/my-app`).
 - A missing `genius.config.json` means a fresh clone: start onboarding at step 1.
@@ -311,6 +311,7 @@ The user's decision of 2026-11-06: every project and service in the config is li
 - At the start of a session, and every 15 minutes while it is open, run `bin/status` and the `check` of each pending operation (a session cron job; it expires after 7 days — create it again).
 - A change (a run finished or failed, a URL down, an operation advanced, an agent finished) is reported at once, with the project tag; then do the next step that the user already approved.
 - Every reply to the user ends, before the 🔊 line, with one status line per project from `bin/status --line`, also for projects we did not talk about.
+- Herdr (optional): `bin/genius herdr install [--show]` adds the layout `genius`, Herdr's `main` with a right column of three shelves: attention, projects, operations (mod `herdr/genius-status`, data from `bin/status --json`). Install copies the code into Herdr's folder; run it again after a change in `herdr/`. Never restart Herdr (the user's decision of 2026-11-12). `uninstall` removes it.
 - Never check TLS loosely: an untrusted certificate is reported as such; it is info only when the service has `"expect": "untrusted-cert"`.
 
 ## Pending operations

@@ -5,8 +5,10 @@
 # bin/genius new                  clean start: move the personal data to backup/<date>/ (nothing deleted)
 # bin/genius adopt                «this is my install»: bind a moved/copied config to this folder and Mac
 # bin/genius where                show where the config was made and where it runs now
+# bin/genius herdr install [--show] | uninstall | status   the status shelves in Herdr (bin/lib/herdr.py)
 cd "$(dirname "$0")/.." || exit 1
 case "${1:-}" in
   save|restore|new|adopt|where) exec /usr/bin/python3 bin/lib/install.py "$@" ;;
+  herdr) shift; exec /usr/bin/python3 bin/lib/herdr.py "$@" ;;
   *) exec claude "Почни сесію genius-ai" "$@" ;;
 esac
