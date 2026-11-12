@@ -8,8 +8,8 @@ Herdr reads mods and layouts only from its own folder (~/.config/herdr-app, or $
 The code lives here, in herdr/; install copies it there (Herdr's hot reload does not see through
 links), so run install again after a change. Herdr is never restarted.
 The layout `genius` is Herdr's `main` with one more column on the right: three shelves of the mod
-genius-status (attention, projects, operations), and the status bar genius-footer (Herdr's own
-plus live CPU and RAM). It is made again from `main` on every install, so it follows Herdr's updates.
+genius-status (attention, projects, operations), one more shelf in the left sidebar (requests of
+agents), and the status bar genius-footer (Herdr's own plus live CPU and RAM). It is made again from `main` on every install, so it follows Herdr's updates.
 """
 import json
 import os
@@ -95,6 +95,12 @@ def install(show):
         "background": "canvas", "padding": 8, "gap": 8,
         "children": [shelf("attention", {"weight": 2}), shelf("projects", {"weight": 4}), shelf("ops", {"weight": 2})],
     }]
+    # the left sidebar: requests of agents under Herdr's agents list
+    lists = find(layout, "sidebar-lists")
+    if lists is not None:
+        lists["children"] = [c for c in lists.get("children", []) if c.get("id") != "genius-requests"] + [{
+            "id": "genius-requests", "type": "block", "size": {"weight": 1},
+            "content": {"mod": "genius-status", "props": {"section": "requests"}}}]
     footer = find(layout, "status")
     if footer and footer.get("content", {}).get("mod") == "workspace-status":
         footer["content"]["mod"] = "genius-footer"
