@@ -1,6 +1,6 @@
 """genius-ai for Herdr: the status shelves in a right column.
 
-    bin/genius herdr install [--show]   copy the mod, write the layout `genius`, check it; --show switches to it
+    bin/genius herdr install [--show]   copy the mods, write the layout `genius`, check it; --show switches to it
     bin/genius herdr uninstall          back to the layout `main`, remove the mod and the layout
     bin/genius herdr status             what is installed
 
@@ -8,8 +8,8 @@ Herdr reads mods and layouts only from its own folder (~/.config/herdr-app, or $
 The code lives here, in herdr/; install copies it there (Herdr's hot reload does not see through
 links), so run install again after a change. Herdr is never restarted.
 The layout `genius` is Herdr's `main` with one more column on the right: three shelves of the mod
-genius-status (attention, projects, operations). It is made again from `main` on every install,
-so it follows Herdr's updates.
+genius-status (attention, projects, operations), and the status bar genius-footer (Herdr's own
+plus live CPU and RAM). It is made again from `main` on every install, so it follows Herdr's updates.
 """
 import json
 import os
@@ -18,9 +18,8 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
-SRC = os.path.join(ROOT, "herdr", "genius-status")
 HERDR = os.environ.get("HERDR_APP_HOME") or os.path.expanduser("~/.config/herdr-app")
-MOD = os.path.join(HERDR, "mods", "genius-status")
+MODS = ["genius-status", "genius-footer"]                       # folders in herdr/, same names in Herdr
 LAYOUT = os.path.join(HERDR, "layouts", "genius.json")
 COLUMN_ID = "genius"
 
@@ -33,8 +32,12 @@ def herdr_app(*args):
         return 1, str(e)
 
 
-def ours_mod():
-    return os.path.isfile(os.path.join(MOD, "root.json"))
+def mod_dir(name):
+    return os.path.join(HERDR, "mods", name)
+
+
+def ours_mod(name):
+    return os.path.isfile(os.path.join(mod_dir(name), "root.json"))      # root.json marks our copy
 
 
 def ours_layout():
@@ -43,6 +46,16 @@ def ours_layout():
             return any(c.get("id") == COLUMN_ID for c in json.load(f).get("children", []))
     except (OSError, ValueError):
         return False
+
+
+def find(node, node_id):
+    if node.get("id") == node_id:
+        return node
+    for child in node.get("children", []):
+        hit = find(child, node_id)
+        if hit:
+            return hit
+    return None
 
 
 def shelf(section, size):
@@ -55,22 +68,24 @@ def install(show):
     if not os.path.isdir(HERDR):
         print(f"Herdr not found ({HERDR}): nothing to install.")
         return 0
-    if os.path.exists(MOD) and not ours_mod():
-        print(f"❌ {MOD} exists and is not genius-ai's: left as is.")
-        return 1
+    for name in MODS:
+        if os.path.exists(mod_dir(name)) and not ours_mod(name):
+            print(f"❌ {mod_dir(name)} exists and is not genius-ai's: left as is.")
+            return 1
     if os.path.exists(LAYOUT) and not ours_layout():
         print(f"❌ {LAYOUT} exists and is not genius-ai's: left as is.")
         return 1
-    # 1. the mod: a fresh copy, plus root.json (which genius-ai folder it reads)
-    shutil.rmtree(MOD, ignore_errors=True)
-    shutil.copytree(SRC, MOD)
-    with open(os.path.join(MOD, "root.json"), "w", encoding="utf-8") as f:
-        json.dump({"root": ROOT}, f)
-        f.write("\n")
-    code, out = herdr_app("check", MOD)
-    if code != 0:
-        print(f"❌ herdr-app check failed:\n{out}")
-        return 1
+    # 1. the mods: a fresh copy each, plus root.json (which genius-ai folder it reads)
+    for name in MODS:
+        shutil.rmtree(mod_dir(name), ignore_errors=True)
+        shutil.copytree(os.path.join(ROOT, "herdr", name), mod_dir(name))
+        with open(os.path.join(mod_dir(name), "root.json"), "w", encoding="utf-8") as f:
+            json.dump({"root": ROOT}, f)
+            f.write("\n")
+        code, out = herdr_app("check", mod_dir(name))
+        if code != 0:
+            print(f"❌ herdr-app check {name} failed:\n{out}")
+            return 1
     # 2. the layout: Herdr's main + the right column
     with open(os.path.join(HERDR, "layouts", "main.json"), encoding="utf-8") as f:
         layout = json.load(f)
@@ -80,10 +95,13 @@ def install(show):
         "background": "canvas", "padding": 8, "gap": 8,
         "children": [shelf("attention", {"weight": 1}), shelf("projects", {"weight": 3}), shelf("ops", {"weight": 2})],
     }]
+    footer = find(layout, "status")
+    if footer and footer.get("content", {}).get("mod") == "workspace-status":
+        footer["content"]["mod"] = "genius-footer"
     with open(LAYOUT, "w", encoding="utf-8") as f:
         json.dump(layout, f, ensure_ascii=False, indent=2)
         f.write("\n")
-    print(f"✅ mod genius-status and layout genius installed in {HERDR}")
+    print(f"✅ mods {', '.join(MODS)} and layout genius installed in {HERDR}")
     if show:
         code, out = herdr_app("do", "layout.switch", "--name", "genius")
         print("✅ layout genius shown" if code == 0 else f"❌ layout.switch: {out}")
@@ -107,15 +125,17 @@ def uninstall():
             print(f"⚠️  could not switch to main: {out}")
     if ours_layout():
         os.remove(LAYOUT)
-    if ours_mod():
-        shutil.rmtree(MOD)
+    for name in MODS:
+        if ours_mod(name):
+            shutil.rmtree(mod_dir(name))
     print("✅ genius-ai removed from Herdr")
     return 0
 
 
 def status():
     print(f"Herdr folder: {HERDR}" + ("" if os.path.isdir(HERDR) else "  (not found)"))
-    print(f"mod genius-status: {'installed' if ours_mod() else 'not installed'}")
+    for name in MODS:
+        print(f"mod {name}: {'installed' if ours_mod(name) else 'not installed'}")
     print(f"layout genius:     {'installed' if ours_layout() else 'not installed'}")
     return 0
 
