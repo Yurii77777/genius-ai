@@ -327,6 +327,9 @@ The user's decision of 2026-11-12: the user must see who works. Herdr shows a su
 - A short lookup (a search, reading a few files) stays an internal subagent.
 - The brief stands alone: the goal, the paths, the project rules to read, and the three rules of «Ask, do not invent».
 - Add it to `state/operations.json` with `"check": "hc get <name> --json"`. Read its screen with `hc read <name>`; wait with `hc wait <name>`.
+- Right after the start, run `hc wait <name>` as a background command: its end must reach this session at once, never wait for the user to ask (the user's decision of 2026-11-12).
+- When it ends: save its report (`hc read <name>`) to `state/agents/<name>.md`, tell the user in the same reply, then stop it (`hc kill <name>`), so it leaves «Requests». A follow-up is a new sub-agent whose brief points to the saved report.
+- A sub-agent that waits for the user's answer is also saved and stopped; its questions go to its operation (`"needs": "user"`). The answer starts a new one.
 - It ends with this session. Add `--outlive-parent` only for work that must survive the session.
 - A sub-agent that asks a question shows as blocked in Herdr. Bring its question to the user; never answer its permission or trust prompt yourself.
 - Start it only in a folder that Claude Code already trusts (a project's path). In a new folder it stops at the trust prompt, and Herdr shows no status for it: the panel stays silent. After every start, check `hc get <name> --json`; with `"status": null`, read its screen and tell the user what it waits for.
