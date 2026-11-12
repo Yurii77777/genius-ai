@@ -128,6 +128,15 @@ LIVE_PROMPT = ("[genius-ai live control] Run `bin/status` in this folder and the
                "project tag and do the next approved step (AGENTS.md «Live control of all projects»).")
 
 
+def herdr_panel() -> bool:
+    """The genius-ai status shelves are installed in Herdr for this folder (bin/genius herdr install)."""
+    herdr = Path(os.environ.get("HERDR_APP_HOME") or Path.home() / ".config" / "herdr-app")
+    try:
+        return json.loads((herdr / "mods" / "genius-status" / "root.json").read_text()).get("root") == str(ROOT)
+    except (OSError, ValueError):
+        return False
+
+
 def live_control(projects: list) -> str:
     """Every project in the config is live from the first session on (AGENTS.md «Live control»)."""
     if not projects:
@@ -141,7 +150,9 @@ def live_control(projects: list) -> str:
             + (out or "- bin/status gave no output") +
             "\nIn your first reply: (1) schedule the live-control job with CronCreate, cron \"7,22,37,52 * * * *\", "
             f"recurring, prompt: {json.dumps(LIVE_PROMPT, ensure_ascii=False)} — every session, it dies with the "
-            "session; (2) end every reply with one status line per project (`bin/status --line`).")
+            "session; " + ("(2) the status is on the Herdr panel: never end a reply with status lines."
+                           if herdr_panel() else
+                           "(2) end every reply with one status line per project (`bin/status --line`)."))
 
 
 COPIED = (

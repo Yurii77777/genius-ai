@@ -310,7 +310,7 @@ The user's decision of 2026-11-06: every project and service in the config is li
 - `bin/status` shows the live state of every project (git, PRs, running and failed workflows, URL checks, pending operations). `--line` gives one line per project.
 - At the start of a session, and every 15 minutes while it is open, run `bin/status` and the `check` of each pending operation (a session cron job; it expires after 7 days — create it again).
 - A change (a run finished or failed, a URL down, an operation advanced, an agent finished) is reported at once, with the project tag; then do the next step that the user already approved.
-- Every reply to the user ends, before the 🔊 line, with one status line per project from `bin/status --line`, also for projects we did not talk about.
+- With the Herdr panel installed (see below), the status lives there: never end a reply with status lines (the user's decision of 2026-11-12). Without it, every reply ends, before the 🔊 line, with one status line per project from `bin/status --line`, also for projects we did not talk about.
 - Herdr (optional): `bin/genius herdr install [--show]` adds the layout `genius`, Herdr's `main` with a right column of three shelves: attention, projects, operations (mod `herdr/genius-status`, data from `bin/status --json`). Install copies the code into Herdr's folder; run it again after a change in `herdr/`. Never restart Herdr (the user's decision of 2026-11-12). `uninstall` removes it.
 - Never check TLS loosely: an untrusted certificate is reported as such; it is info only when the service has `"expect": "untrusted-cert"`.
 
