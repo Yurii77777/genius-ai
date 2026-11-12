@@ -39,6 +39,13 @@ import voice_config  # noqa: E402
 SHARE = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "run")      # runtime state: socket, temp wavs, logs
 SOCK = os.path.join(SHARE, "tts.sock")
 IDLE = int(os.environ.get("SPEAK_IDLE", "900"))
+# A smart refresh (the user's decision of 2026-11-12): torch's CPU allocator keeps what each
+# sentence needed: a fresh server holds ~0.6 GB, after replies ~2.1 GB, ~3.8 GB after an hour. After
+# REFRESH_IDLE s of quiet, a server above REFRESH_MB loads itself again IN PLACE (same pid,
+# `os.execv`): `speak` sees the process, waits for the socket and hands its text over, so a
+# reply that comes during the ~30 s load waits instead of starting a second server.
+REFRESH_IDLE = int(os.environ.get("SPEAK_REFRESH_IDLE", "300"))
+REFRESH_MB = int(os.environ.get("SPEAK_REFRESH_MB", "1000"))
 LINE = int(os.environ.get("SPEAK_LINE", "260"))
 VOICE = os.path.dirname(LIB)
 MODELS = os.path.join(VOICE, "models")              # filled by voice/bin/install; never the network
@@ -281,6 +288,26 @@ def handle(line):
                 cv.notify()
 
 
+def rss_mb():
+    """This process's resident memory in MB, or 0 when it cannot be read."""
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())],
+                             capture_output=True, text=True, timeout=5).stdout
+        return int(out.strip() or 0) // 1024
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+def refresh_due():
+    """Quiet long enough, nothing playing or queued, and grown past the limit."""
+    if time.time() - last_request < REFRESH_IDLE:
+        return False
+    with cv:
+        if current is not None or queue:
+            return False
+    return rss_mb() > REFRESH_MB
+
+
 def main():
     os.makedirs(SHARE, exist_ok=True)
     if os.path.exists(SOCK):
@@ -295,6 +322,12 @@ def main():
         try:
             conn, _ = srv.accept()
         except socket.timeout:
+            if refresh_due():
+                size = rss_mb()
+                srv.close()
+                os.unlink(SOCK)
+                print(f"tts-server: quiet {int(time.time() - last_request)} s at {size} MB, loading again", flush=True)
+                os.execv(sys.executable, [sys.executable, *sys.argv])
             continue
         with conn:
             line = conn.makefile(encoding="utf-8").readline().rstrip("\n")
