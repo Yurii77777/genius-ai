@@ -3,6 +3,8 @@
     bin/genius herdr install [--show]   copy the mods, write the layout `genius`, check it; --show switches to it
     bin/genius herdr uninstall          back to the layout `main`, remove the mod and the layout
     bin/genius herdr status             what is installed
+    bin/genius herdr claude on | off    the footer follows the active space: Claude Code's status line of
+                                        the USER (~/.claude/settings.json) → bin/lib/statusline.py
     bin/genius herdr sync               install again only when herdr/ or Herdr's main layout changed (SessionStart hook)
 
 Herdr reads mods and layouts only from its own folder (~/.config/herdr-app, or $HERDR_APP_HOME).
@@ -162,6 +164,45 @@ def sync():
     return install(False)
 
 
+def claude_statusline(turn_on):
+    """The user's own Claude Code settings: every session reports its model, context and limits.
+
+    Never replaces a status line the user already has; keeps a backup before the first change.
+    """
+    path = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "settings.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        settings = json.loads(raw)
+    except OSError:
+        raw, settings = None, {}
+    except ValueError:
+        print(f"❌ {path} is not valid JSON: left as is.")
+        return 1
+    script = os.path.join(ROOT, "bin", "lib", "statusline.py")
+    now = (settings.get("statusLine") or {}).get("command", "")
+    ours = "bin/lib/statusline.py" in now
+    if turn_on:
+        if now and not ours:
+            print(f"❌ {path} already has a status line: left as is.\n   {now}")
+            return 1
+        settings["statusLine"] = {"type": "command", "command": f'/usr/bin/python3 "{script}" 2>/dev/null || true'}
+    else:
+        if not ours:
+            print("nothing to remove: the user's status line is not genius-ai's")
+            return 0
+        settings.pop("statusLine")
+    if raw is not None and not os.path.exists(path + ".bak-genius"):
+        with open(path + ".bak-genius", "w", encoding="utf-8") as f:
+            f.write(raw)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    print(f"✅ status line {'set' if turn_on else 'removed'} in {path}" + (" (new sessions; open ones after their next reply)" if turn_on else ""))
+    return 0
+
+
 def status():
     print(f"Herdr folder: {HERDR}" + ("" if os.path.isdir(HERDR) else "  (not found)"))
     for name in MODS:
@@ -178,6 +219,8 @@ if __name__ == "__main__":
         sys.exit(uninstall())
     if cmd == "status":
         sys.exit(status())
+    if cmd == "claude" and sys.argv[2:3] in (["on"], ["off"]):
+        sys.exit(claude_statusline(sys.argv[2] == "on"))
     if cmd == "sync":
         sys.exit(sync())
-    sys.exit("usage: bin/genius herdr install [--show] | uninstall | status")
+    sys.exit("usage: bin/genius herdr install [--show] | uninstall | status | sync | claude on|off")

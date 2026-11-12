@@ -7,11 +7,13 @@
 // macOS only: elsewhere the two numbers are simply not shown.
 // From the genius-ai folder named in root.json (written by the installer), every 5 s too:
 //   voice  🔊/🔇 from genius.config.json → voice.enabled; a click runs voice/bin/speak on | off
-//   Claude model, context and usage limits from state/claude-status.json (bin/lib/statusline.py)
+//   Claude model and context of the ACTIVE space's session (state/claude/<folder>.json), and the
+//          account's usage limits from the latest report of any session (state/claude-status.json);
+//          both written by bin/lib/statusline.py. A space without an agent shows the limits only.
 
 import { View, div, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { spaces, agents, theme, run, window, keys, exec, readTextFile, appHome } from "herdr";
+import { spaces, agents, panes, theme, run, window, keys, exec, readTextFile, appHome } from "herdr";
 
 const EVERY = 5000;
 const PROBE = "iostat -n 0 -c 2 -w 1 | tail -1; vm_stat; sysctl -n kern.memorystatus_vm_pressure_level hw.memsize";
@@ -56,15 +58,29 @@ export default class GeniusFooter extends View {
     cx.spawn(async (cx) => {
       const json = async (path) => { try { return JSON.parse((await readTextFile(`${this.root}/${path}`)) ?? "null"); } catch { return null; } };
       const cfg = await json("genius.config.json");
-      const claude = await json("state/claude-status.json");
+      const latest = await json("state/claude-status.json");
+      // the session of the active space: its agent's folder, or a parent of it (the session's own folder)
+      let session = null;
+      for (let dir = this.sessionFolder(), up = 0; dir && dir !== "/" && up < 6 && !session; dir = dir.slice(0, dir.lastIndexOf("/")), up++) {
+        session = await json(`state/claude/${dir.replace(/[^A-Za-z0-9]/g, "-")}.json`);
+      }
+      const claude = latest && { model: session?.model, context_window: session?.context_window, rate_limits: latest.rate_limits };
       const next = { uk: cfg?.language === "uk", voice: cfg?.voice ? cfg.voice.enabled !== false : null, claude };
-      const key = JSON.stringify([next.voice, claude?._saved]);
+      const key = JSON.stringify([next.voice, latest?._saved, session?._saved, session?.cwd]);
       if (key !== this.geniusKey) { this.geniusKey = key; this.genius = next; cx.notify(); }
     });
   }
 
   // On: the voice server and Whisper load at once; ⏳ stays until the voice server answers (≈30 s),
   // so the click never looks hung. Off: everything of the voice stops at once.
+  // Where the agent of the active space runs: the focused agent's terminal, else the space's first agent.
+  sessionFolder() {
+    const space = spaces().find((s) => s.active);
+    const mine = agents().filter((a) => a.space === space?.id);
+    const agent = mine.find((a) => a.focused) ?? mine[0];
+    return agent ? panes().find((p) => p.pane === agent.pane)?.cwd ?? null : null;
+  }
+
   toggleVoice(cx) {
     if (this.voiceBusy) return;
     const on = this.genius.voice;
@@ -88,15 +104,23 @@ export default class GeniusFooter extends View {
   // "Fable 5.2 · ctx 22% · 5h 40% · 7d 37%": the limits Claude Code reported last, the fullest decides the color.
   claude(t) {
     const c = this.genius.claude;
-    if (!c?.model) return null;
+    if (!c) return null;
     const limits = [["5h", c.rate_limits?.five_hour], ["7d", c.rate_limits?.seven_day]].filter(([, l]) => l?.used_percentage != null);
     const worst = Math.max(0, ...limits.map(([, l]) => l.used_percentage));
     const reset = (l) => l.resets_at ? new Date(l.resets_at * 1000).toLocaleString() : "";
-    const parts = [c.model.display_name, c.context_window?.used_percentage != null && `ctx ${Math.round(c.context_window.used_percentage)}%`,
+    const parts = [c.model?.display_name, c.context_window?.used_percentage != null && `ctx ${Math.round(c.context_window.used_percentage)}%`,
       ...limits.map(([name, l]) => `${name} ${Math.round(l.used_percentage)}%`)].filter(Boolean);
     return div().id("claude").text_color(worst >= 90 ? t.blocked : worst >= 75 ? t.working : t.muted)
-      .tooltip(limits.map(([name, l]) => `${name}: ${Math.round(l.used_percentage)}% → ${reset(l)}`).join("\n") || c.model.display_name)
+      .tooltip(limits.map(([name, l]) => `${name}: ${Math.round(l.used_percentage)}% → ${reset(l)}`).join("\n") || (c.model?.display_name ?? ""))
       .child(parts.join(" · "));
+  }
+
+  // The active space changed: read its session at once, not at the next 5 s tick.
+  follow(cx) {
+    const now = this.sessionFolder();
+    if (now === this.followed || !this.root) return;
+    this.followed = now;
+    this.readGenius(cx);
   }
 
   // The palette key as actually bound (as in Herdr's own status bar).
@@ -109,7 +133,8 @@ export default class GeniusFooter extends View {
     return key ? `${key}  commands` : "commands";
   }
 
-  render() {
+  render(cx) {
+    this.follow(cx);
     const t = theme();
     const space = spaces().find((s) => s.active);
     const list = agents();
