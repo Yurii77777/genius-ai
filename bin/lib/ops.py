@@ -171,31 +171,45 @@ def sweep_job(action):
 
 
 def loop_job(action, label, args, every, log):
-    """A background loop started from this Mac's terminal session, not by launchd: a launchd job
-    may not read ~/Desktop (macOS privacy: «Operation not permitted»), a child of the terminal may.
-    Its pid is in state/<label>.pid; a reboot ends it and the SessionStart hook starts it again."""
+    """A background loop in its own Herdr terminal («genius-…», kept alive by Herdr, outlives this
+    session). Not launchd: a launchd job may not read ~/Desktop (macOS privacy: «Operation not
+    permitted»); a child process of a Claude session dies with that session's cleanup. A Herdr
+    terminal has the terminal's own access. Without Herdr: a detached process (pid in state/)."""
+    import shutil
     import signal
-    pidfile = os.path.join(ROOT, "state", f"{label}.pid")
-    def alive():
-        try:
-            pid = int(open(pidfile).read())
-            os.kill(pid, 0)
-            return pid
-        except Exception:
-            return None
+    name = label.replace("genius-ai.", "genius-")
+    me = os.path.join(ROOT, "bin", "genius")
+    cmd = " ".join(f'"{a}"' for a in [me] + args)
+    loop = f'while true; do {cmd} >> "{log}" 2>&1; sleep {every}; done'
     subprocess.run(["launchctl", "remove", label], capture_output=True)   # the old launchd job, if any
-    pid = alive()
+    pidfile = os.path.join(ROOT, "state", f"{label}.pid")
+    if shutil.which("hc"):
+        live = subprocess.run(["hc", "get", name, "--json"], capture_output=True, text=True)
+        running = live.returncode == 0 and '"state":"live"' in live.stdout.replace(" ", "")
+        if action == "start":
+            if running:
+                print(f"{name}: already running"); return
+            subprocess.run(["hc", "rm", name], capture_output=True)
+            subprocess.run(["hc", "run", "--bg", "--json", "--name", name, "--outlive-parent", "--cwd", ROOT,
+                            "--", "/bin/zsh", "-c", loop], capture_output=True, text=True, check=True)
+            print(f"started {name} (Herdr terminal): every {every} s, log {os.path.relpath(log, ROOT)}")
+        elif action == "stop":
+            subprocess.run(["hc", "kill", name], capture_output=True)
+            print(f"stopped {name}")
+        else:
+            print("running" if running else "not running")
+        return
+    try:
+        pid = int(open(pidfile).read()); os.kill(pid, 0)
+    except Exception:
+        pid = None
     if action == "start":
         if pid:
-            print(f"{label}: already running (pid {pid})")
-            return
-        me = os.path.join(ROOT, "bin", "genius")
-        cmd = " ".join(f'"{a}"' for a in [me] + args)
-        loop = f'while true; do {cmd} >> "{log}" 2>&1; sleep {every}; done'
+            print(f"{label}: already running (pid {pid})"); return
         p = subprocess.Popen(["/bin/zsh", "-c", loop], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True, cwd=ROOT)
         open(pidfile, "w").write(str(p.pid))
-        print(f"started {label}: every {every} s (pid {p.pid}), log {os.path.relpath(log, ROOT)}")
+        print(f"started {label}: every {every} s (pid {p.pid})")
     elif action == "stop":
         if pid:
             os.killpg(pid, signal.SIGTERM)
