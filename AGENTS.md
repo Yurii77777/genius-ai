@@ -332,7 +332,8 @@ The user's decision of 2026-11-12: the user must see who works. Herdr shows a su
 
 - This applies when the session runs in Herdr: `hc ls` works and lists this session.
 - A long task for a project (a feature, a review, a study, a release step) starts as a visible sub-agent:
-  `hc run --bg --json --name <tag>-<task> --cwd <project path> -- zsh -lic 'exec claude "$0"' "<brief>"`.
+  `hc run --bg --json --name <tag>-<task> --label genius.nosuggest=1 --cwd <project path> -- zsh -lic 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false exec claude "$0"' "<brief>"`.
+  No suggestions: Claude Code's grey suggested prompt looks like the user's text on the screen; the watcher sends an agent's input only with the label `genius.nosuggest=1`.
   The interactive login shell gives it the user's PATH (nvm, pyenv); without it the project's own hooks fail with «command not found».
   Herdr shows it under this session in «Agents» and in the project's card on the panel.
 - A short lookup (a search, reading a few files) stays an internal subagent.

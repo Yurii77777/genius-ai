@@ -41,9 +41,11 @@ RESUME = ("The previous answer broke off (API error, e.g. the Mac slept). Contin
 
 WORDS = {
     "uk": {"waits": "агент {n} чекає на вашу відповідь або закінчив", "hung": "агент {n} не рухається {m} хвилин",
-           "dialog": "агент {n} чекає на дозвіл", "sent": "надіслала агенту {n} вашу відповідь"},
+           "dialog": "агент {n} чекає на дозвіл", "sent": "надіслала агенту {n} вашу відповідь",
+           "draft": "в агента {n} у полі вводу є текст, я його не надсилала"},
     "en": {"waits": "agent {n} waits for your answer or has finished", "hung": "agent {n} has not moved for {m} minutes",
-           "dialog": "agent {n} waits for a permission", "sent": "sent your answer to agent {n}"},
+           "dialog": "agent {n} waits for a permission", "sent": "sent your answer to agent {n}",
+           "draft": "agent {n} has text in its input; not sent"},
 }
 
 
@@ -189,6 +191,15 @@ def watch():
                 alert(t, W["dialog"].format(n=name), spoken, cfg)
             continue
 
+        # Claude Code may show its own suggested next prompt in the input, and a screen read cannot
+        # tell it from the user's text. Only an agent started without suggestions
+        # (CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false, label genius.nosuggest=1) gets its input sent;
+        # for any other agent the text only raises an alert.
+        if draft and (t.get("labels") or {}).get("genius.nosuggest") != "1":
+            if s.get("alerted") != f"draft-{t.get('turn')}":
+                s["alerted"] = f"draft-{t.get('turn')}"
+                alert(t, W["draft"].format(n=name), spoken, cfg)
+            continue
         if draft:                                   # the user's own answer waits in the input
             if s.get("draft") != draft:
                 s["draft"], s["draft_since"] = draft, now
