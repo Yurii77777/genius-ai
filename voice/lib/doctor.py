@@ -3,7 +3,8 @@
     voice/bin/doctor [--lang uk|en|all] [--dictation] [--online] [--json]
 
 --lang       languages to check (default: "language" from genius.config.json, else all)
---dictation  also check voice input (Whisper)
+--dictation  also check voice input: Whisper, and the macOS permissions of the F5 listener
+             (Full Disk Access, Microphone, Accessibility, Automation; voice/lib/dictate_perms.py)
 --online     ask Hugging Face whether each model is public and ungated (needs network)
 --json       machine-readable output (used by the SessionStart hook)
 Standard library only: it must run on a fresh Mac before anything is installed.
@@ -162,9 +163,15 @@ def report(langs, dictation, check_online):
         comps.append(item)
     disk_ok = m["disk_free"] > download * 1.2 + 2 * GB
     ram_ok = m["ram"] >= ram_need + 4 * GB
+    perms = None
+    if dictation and platform.system() == "Darwin":
+        sys.path.insert(0, LIB)
+        import dictate_perms                                  # read-only: launchctl print + the listener's report
+        perms = dictate_perms.checks()
     can_speak_now = all(x["state"] in ("installed", "in-cache") for x in comps if x["id"] != "whisper")
     return {
         "languages": langs, "machine": m, "components": comps,
+        "dictation_permissions": perms,
         "download_bytes": download, "ram_needed": ram_need,
         "fits": {"disk": disk_ok, "ram": ram_ok},
         "can_speak_now": can_speak_now and not m["audio"]["muted"],
@@ -192,6 +199,10 @@ def human(r):
     for c in r["components"]:
         extra = f"  online={c['online']}" if "online" in c else ""
         print(f"  {c['id']:14} {marks[c['state']]:30} {g(c['size']):>8}  {c['license'] or ''}{extra}")
+    if r.get("dictation_permissions") is not None:
+        print("\nF5 dictation (permissions of voice/build/dictate-hotkey; self-test: voice/bin/dictate-test):")
+        import dictate_perms
+        dictate_perms.human(r["dictation_permissions"])
     print(f"\nTo download: {g(r['download_bytes'])}   RAM while speaking: ≈{g(r['ram_needed'])}")
     print(f"Fits: disk={'yes' if r['fits']['disk'] else 'NO'}, RAM={'yes' if r['fits']['ram'] else 'NO'}")
     print(f"Verdict: {r['verdict']}   can speak now: {'yes' if r['can_speak_now'] else 'no'}")

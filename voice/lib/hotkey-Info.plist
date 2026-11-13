@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Embedded into voice/build/dictate-hotkey (swiftc … -sectcreate __TEXT __info_plist).
+     macOS shows these texts in its permission dialogs; without them a plain binary gets no
+     microphone dialog and the recording hangs. -->
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>genius-ai.voice.hotkey</string>
+  <key>CFBundleName</key><string>genius-ai F5</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>F5 dictation records your voice and turns it into text on this Mac. / Диктування F5 записує голос і перетворює його на текст на цьому Mac.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>F5 dictation pastes the text into the window you work in (System Events). / Диктування F5 вставляє текст у ваше вікно (System Events).</string>
+</dict></plist>

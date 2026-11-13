@@ -4,6 +4,10 @@
 #   dictate-setup stop       stop the listener and stt-server, give the 🎤 key back to macOS
 #   dictate-setup status     show what runs
 #   dictate-setup uninstall  stop, and remove the old global install (LaunchAgents, ~/.local) if any is left
+# Permissions (voice/lib/dictate_perms.py): checked BEFORE the start (the fix is printed up front) and
+# after it (the listener reports its own Microphone, Accessibility, Automation). A manual start also
+# lets the listener ask once for the missing ones (system dialogs); --quiet (SessionStart) never asks
+# and prints only the ⛔ lines. Self-test: voice/bin/dictate-test.
 # The listener is voice/build/dictate-hotkey, started with `launchctl submit` (an in-memory job:
 # no file in ~/Library/LaunchAgents). A reboot or logout clears the job and the key remap;
 # the genius-ai SessionStart hook runs `dictate-setup start` again, so F5 works once Claude
@@ -44,6 +48,7 @@ case "${1:-start}" in
 stop)
   stop_all; echo "⏹ F5 listener and Whisper stopped; 🎤 key is the system dictation key again"; exit 0 ;;
 status)
+  /usr/bin/python3 "$voice/lib/dictate_perms.py" status
   echo "key remap:   $(hidutil property --get UserKeyMapping | tr -d '\n ')"
   if running; then echo "F5 listener: running ($label)"
   elif loaded; then echo "F5 listener: DOWN"; why_down
@@ -76,11 +81,24 @@ if [[ ! -f $voice/models/whisper/weights.safetensors ]] || \
   echo "❌ Whisper is not installed in the project: run voice/bin/install --dictation"; exit 1
 fi
 
-# 2. build the listener if it is missing or older than its source
+# 1b. permissions, up front: Full Disk Access is decided by the folder alone
+case $voice in
+  ($HOME/Desktop|$HOME/Documents|$HOME/Downloads)/*)
+    if ! running; then
+      say_ "⚠️  genius-ai is in ${voice:h:h:t}: macOS lets the F5 listener start from there only with Full Disk Access."
+      say_ "   Grant it now: voice/bin/dictate-test --open fda   (or move genius-ai out of ~/Desktop, ~/Documents, ~/Downloads)"
+    fi ;;
+esac
+
+# 2. build the listener if it is missing or older than its source (the Info.plist carries the
+# texts of the permission dialogs; a rebuilt binary may need its permissions granted again)
 mkdir -p "$build" "$run"
-if [[ ! -x $build/dictate-hotkey || $voice/lib/hotkey.swift -nt $build/dictate-hotkey ]]; then
+if [[ ! -x $build/dictate-hotkey || $voice/lib/hotkey.swift -nt $build/dictate-hotkey || \
+      $voice/lib/hotkey-Info.plist -nt $build/dictate-hotkey ]]; then
   say_ "🔨 building voice/build/dictate-hotkey"
-  swiftc -O -o "$build/dictate-hotkey" "$voice/lib/hotkey.swift" || exit 1
+  swiftc -O -o "$build/dictate-hotkey" "$voice/lib/hotkey.swift" \
+    -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$voice/lib/hotkey-Info.plist" || exit 1
+  say_ "   rebuilt: if F5 stops pasting, run voice/bin/dictate-test"
   launchctl bootout "gui/$uid/$label" 2>/dev/null; launchctl remove "$label" 2>/dev/null
   sleep 0.5                                              # a rebuilt binary needs a fresh job
 fi
@@ -124,8 +142,15 @@ PLIST
   sleep 1
 fi
 
-# 4. report
+# 4. report, with what the listener says about its own permissions
 if running; then
+  (( quiet )) || : >"$run/request-permissions"            # a manual start: ask once for what is missing
+  for _ in 1 2 3 4; do
+    [[ $(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("pid"))' \
+         "$run/permissions.json" 2>/dev/null) == $(launchctl list "$label" 2>/dev/null | awk -F'= ' '/"PID"/{print $2+0}') ]] && break
+    sleep 0.5
+  done
+  /usr/bin/python3 "$voice/lib/dictate_perms.py" problems $( (( quiet )) && echo --fail-only )
   say_ "✅ F5 (🎤) runs dictate: press, speak, pause 15 s → text appears at the cursor"
   say_ "   press again while recording to stop early · ⌃⇧5 toggles a screen recording"
   say_ "   Whisper stays loaded between takes and unloads after 15 min idle"

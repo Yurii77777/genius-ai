@@ -44,10 +44,14 @@ def project_status(p: dict) -> str:
     return f"- {name}: {path} | branch {branch} | {changes} uncommitted{sync} | last commit {last}"
 
 
+DICTATION_PROBLEMS: list[str] = []
+
+
 def dictation_ready(cfg: dict) -> bool:
     """Start the F5 (🎤) listener from the project (voice/bin/dictate-setup) and say whether it runs.
 
     Nothing global keeps it alive: a reboot or logout clears it, and this hook starts it again.
+    A missing macOS permission comes back as a «⛔ F5 · …» line; it goes into the context.
     """
     if (cfg.get("voice") or {}).get("enabled") is False:
         return False
@@ -56,6 +60,8 @@ def dictation_ready(cfg: dict) -> bool:
             [str(ROOT / "voice/bin/dictate-setup"), "start", "--quiet"],
             capture_output=True, text=True, timeout=25,
         )
+        DICTATION_PROBLEMS.extend(l.strip() for l in (out.stdout + out.stderr).splitlines()
+                                  if l.strip().startswith(("⛔", "❌")))
         return out.returncode == 0
     except Exception:
         return False
@@ -102,7 +108,7 @@ def load_config() -> tuple[dict, str]:
         return {"projects": [], "services": []}, f"config is invalid JSON: {e}"
 
 
-STEPS = {"START": 1, "VOICE": 2, "TEXT": 3, "TONE": 3, "PROJECTS": 4, "SERVICES": 5, "FINISH": 6}
+STEPS = {"START": 1, "VOICE": 2, "DICTATION": 2, "TEXT": 3, "TONE": 3, "PROJECTS": 4, "SERVICES": 5, "FINISH": 6}
 OPERATIONS = ROOT / "state" / "operations.json"
 
 
@@ -238,6 +244,8 @@ def main() -> None:
         missing = "START"                                   # step 1: voice or text
     elif voice.get("enabled") and not (voice.get("confirmed") and language and gender):
         missing = "VOICE"                                   # step 2: install, listen, choose, confirm
+    elif voice.get("enabled") and "dictation" not in voice and not cfg.get("onboarded"):
+        missing = "DICTATION"                               # step 2b: F5 and its macOS permissions
     elif not voice.get("enabled") and not (language and gender):
         missing = "TEXT"                                    # step 3: language and gender for text
     elif not cfg.get("tone"):
@@ -261,6 +269,7 @@ def main() -> None:
         )
         banner = {"START": "genius-ai: перший запуск — голос чи текст? / first run — voice or text?",
                   "VOICE": "genius-ai: налаштування голосу",
+                  "DICTATION": "genius-ai: диктування F5 і дозволи macOS",
                   "TEXT": "genius-ai: вибір мови",
                   "TONE": "genius-ai: тон спілкування",
                   "PROJECTS": "genius-ai: підключення проєктів",
@@ -295,6 +304,10 @@ def main() -> None:
     dictation = dictation_ready(cfg)
     banner = banner + "\n" + how_to_start(language, dictation)
     speak_hint(cfg, dictation)
+    if DICTATION_PROBLEMS:
+        context += ("\n[genius-ai] F5 DICTATION PROBLEMS (tell the user, lead them through the fix, "
+                    "then run voice/bin/dictate-test; AGENTS.md «F5 — dictation»):\n"
+                    + "\n".join(DICTATION_PROBLEMS[:6]))
 
     json.dump({
         "systemMessage": banner,

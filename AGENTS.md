@@ -55,7 +55,7 @@ The voice is on from the first reply (no extra command). Only choice 2 or `speak
 
 0. **Claude Code prompts (before the first command).** A fresh clone has no permissions. Claude Code asks before each command, and it asks once to trust the folder. In the first message, before any command, tell the user in both languages:
    - «Claude Code спитає, чи довіряти папці — натисніть «Yes, I trust this folder».»
-   - «Далі він питатиме дозвіл на скрипти налаштування (`voice/bin/doctor`, `voice/bin/install`, `voice/bin/speak`, `afplay voice/sounds/…`). Вибирайте «Yes, and don't ask again for …» — це скрипти самого проєкту, вони нічого не видаляють і нікуди не надсилають.»
+   - «Далі він питатиме дозвіл на скрипти налаштування (`voice/bin/doctor`, `voice/bin/install`, `voice/bin/speak`, `voice/bin/dictate-setup`, `voice/bin/dictate-test`, `afplay voice/sounds/…`). Вибирайте «Yes, and don't ask again for …» — це скрипти самого проєкту, вони нічого не видаляють і нікуди не надсилають.»
    - A blocked command is not a dead end: say what it does, ask the user to allow it, and run it again. Never add permission rules yourself; the user grants them (the user's decision of 2026-11-06).
 1. **Start: voice or text.** Run `voice/bin/doctor --lang all --dictation` first. If its «System» list has ⛔ (no macOS, no Xcode Command Line Tools), give the user the exact fix from it, wait, and run `doctor` again. The only thing outside the project the user may install is Apple's Xcode Command Line Tools. The first message is in both languages (English first, then Ukrainian): a short greeting, what this Mac has (chip, RAM, free disk, sound on/muted, voice models present or not), and one question:
    «1 — 🔊 voice and text / голос і текст (download ≈ <size from doctor>, English + Ukrainian) · 2 — 📝 text only / тільки текст».
@@ -68,6 +68,23 @@ The voice is on from the first reply (no extra command). Only choice 2 or `speak
    - Play the four samples one by one (`afplay voice/sounds/<lang>-<gender>.wav`), announcing each in text first: 1 — uk female, 2 — uk male, 3 — en female, 4 — en male (voice names from `voice/voice.json`).
    - The user picks 1–4 → write `"language"` and `"gender"` (`voice/bin/speak voice female|male`).
    - Say a test phrase with `voice/bin/speak` in the chosen language and ask: «Ви мене чуєте?». Yes → set `"confirmed": true`. No → find the cause (volume, output device, `voice/bin/doctor`).
+2b. **F5 — dictation (voice mode only).** F5 (🎤) records the user's speech and pastes the text at the cursor. macOS blocks it until the user allows it. Without this step F5 fails silently (the lesson of 2026-11-09).
+   - Run `voice/bin/dictate-setup start`, then `voice/bin/doctor --dictation`. Its «F5 dictation» list shows each permission: ✅ granted, ⛔ missing, ❔ not known yet, each with its fix.
+   - The permissions belong to `voice/build/dictate-hotkey`, not to the terminal. Probes from a terminal prove nothing; the listener reports its own state.
+   - Explain each permission in plain words. Do one at a time, in this order:
+
+     | permission | why, in plain words | fix |
+     |---|---|---|
+     | Full Disk Access | only when genius-ai is in ~/Desktop, ~/Documents or ~/Downloads: macOS does not start a background program from there | `voice/bin/dictate-test --open fda`: the pane opens and Finder shows the file. Drag the file into the list, switch it on |
+     | Microphone | to hear the user | `voice/bin/dictate-test --ask`: click «Allow» in the dialog. Denied before → `--open mic`, switch `dictate-hotkey` on |
+     | Accessibility | to press ⌘V and Enter for the user | `--ask` shows a dialog → «Open System Settings» → switch `dictate-hotkey` on. Or `--open ax` and drag the file in |
+     | Automation → System Events | to send those keys through System Events | `--ask` → «OK». Denied before → `--open auto` → `dictate-hotkey` → switch System Events on |
+
+   - Before each pane, say where to click, step by step. After each grant, run `voice/bin/doctor --dictation` again. Report ✅ or ⛔ with the reason.
+   - Self-test: run `voice/bin/dictate-test` in the background; ask the user to press F5 and say «тест, один, два». It types into no window and presses no Enter; the text goes to the clipboard. Report each stage (key, microphone, Whisper, paste) ✅/⛔.
+   - Recommend genius-ai outside ~/Desktop, ~/Documents, ~/Downloads (for example `~/genius-ai`): then Full Disk Access is not needed. To move an install: `voice/bin/dictate-setup stop` → `bin/genius save <folder>` → clone into the new place → `bin/genius restore <archive>` → `voice/bin/install` → `voice/bin/dictate-setup start`. Grants are per file: grant them again for the new path.
+   - All ✅ → write `"dictation": "ok"` into `voice`. The user skips F5 → `"dictation": "skipped"`.
+   - A rebuilt listener (a changed `voice/lib/hotkey.swift`) can lose its grants. After an update that rebuilds it, run `voice/bin/dictate-test`.
 3. **Text only: choose.** Offer the same four: 1 — Українська, жіночий рід · 2 — Українська, чоловічий рід · 3 — English, female · 4 — English, male. Write `"language"` and `"gender"`.
 3b. **Tone and temperament (after language and gender, in voice and in text mode).** The offer depends on the persona just chosen (the user's decision of 2026-11-06):
    - Take the presets from `persona/tones.json`. For each, show its name and its `sample` in the chosen `language` and `gender`.
@@ -82,7 +99,27 @@ The voice is on from the first reply (no extra command). Only choice 2 or `speak
    - Write what you found into `services` (schema below), each URL with its `project`. Show the list and say what each check will watch. The user only removes what is not needed.
    - Nothing found → write `"services": []`.
 6. **Finish.**
-   - Prod access: for each project with a prod, ask how to reach it read-only (host, key) and write it into its project rules. Tell the user which permission rule to allow, so read-only prod checks are not blocked.
+   - Prod access: for each project with a prod, ask how to reach it read-only (host, key) and write it into its project rules.
+   - Permission rules: Claude Code auto mode blocks prod SSH reads, merges and some GitHub writes. Give the user ready-to-paste rules for `.claude/settings.local.json` (personal, gitignored), per project, with the risk of each in one line. Never write the rules yourself; the user adds them.
+
+     ```json
+     { "permissions": { "allow": [
+       "Bash(ssh -i ~/.ssh/<key> <user>@<prod-host> docker ps:*)",
+       "Bash(ssh -i ~/.ssh/<key> <user>@<prod-host> docker logs:*)",
+       "Bash(ssh -i ~/.ssh/<key> <user>@<prod-host> systemctl status:*)",
+       "Bash(gh pr merge:*)",
+       "Bash(gh run rerun:*)"
+     ] } }
+     ```
+
+     | rule | risk |
+     |---|---|
+     | `docker ps`, `systemctl status` on prod | read-only; shows what runs |
+     | `docker logs` on prod | read-only; logs can hold personal data of the project's users |
+     | `gh pr merge` | merges into a protected branch: the agent can start a release. Only when the user wants the agent to merge |
+     | `gh run rerun` | starts CI again; costs CI minutes |
+
+     Never offer `Bash(ssh <user>@<prod-host>:*)`: it allows every command on prod. Give one rule per read-only command.
    - Backup: offer to put genius-ai under git with a private remote (config and project rules are personal; never a public repo).
    - Show the final config and the list of projects with their tags; ask for confirmation. Yes → write `"onboarded": true`.
 7. Run the first monitoring pass (MONITORING MODE).
@@ -144,6 +181,8 @@ A longer message that only mentions sound passes through.
 - The SessionStart hook runs `voice/bin/dictate-setup start`. After a reboot F5 works once Claude is opened in this folder.
 - `voice/bin/dictate-setup status | stop`.
 - macOS notifications (dictation, screen recording) are always in English, whatever the user's `language` (the user's decision of 2026-11-11).
+- Permissions (Full Disk Access only for an install in ~/Desktop, ~/Documents, ~/Downloads; Microphone; Accessibility; Automation → System Events): `voice/bin/doctor --dictation` shows them, `voice/bin/dictate-test --open <fda|mic|ax|auto>` opens the pane, `--ask` shows the system dialogs, `voice/bin/dictate-test` is the safe self-test. `dictate-setup start` prints a missing one before and after the start. The SessionStart hook injects «F5 DICTATION PROBLEMS»: tell the user and lead them through the fix.
+- A failed take says why in a notification and in `voice/run/last-take.json` (microphone blocked, paste refused by Accessibility or Automation). The text then stays in the clipboard.
 - Settings (env): `DICTATE_PAUSE`, `DICTATE_WAIT`, `DICTATE_MAX`, `DICTATE_IDLE`, `DICTATE_SEND`, `DICTATE_LANGS`.
 
 ## Config schema
@@ -153,14 +192,16 @@ A longer message that only mentions sound passes through.
   "language": "uk",
   "gender": "female",
   "tone": { "preset": "peer", "humor": 1, "directness": 2, "detail": 0, "notes": "" },
-  "voice": { "enabled": true, "confirmed": true, "status": true },
+  "voice": { "enabled": true, "confirmed": true, "dictation": "ok", "status": true },
   "onboarded": true,
   "projects": [
     { "name": "my-app", "path": "~/path/to/my-app" }
   ],
   "services": [
     { "name": "GitHub", "type": "github", "account": "<gh-login>", "repos": ["owner/repo"] },
-    { "name": "Prod site", "type": "url", "url": "https://example.com" },
+    { "name": "Prod site", "type": "url", "url": "https://example.com", "project": "my-app" },
+    { "name": "New server", "type": "url", "url": "https://<host>/health", "project": "my-app",
+      "expect": "untrusted-cert", "resolve": "<ip>" },
     { "name": "Vercel", "type": "vercel", "project": "my-app" },
     { "name": "RunPod", "type": "runpod" }
   ]
@@ -172,7 +213,7 @@ A longer message that only mentions sound passes through.
 | type | check |
 |------|-------|
 | github | `gh pr list`, failed runs (`gh run list --status failure`), open issues for each repo |
-| url | HTTP status and response time (`curl -o /dev/null -w`) |
+| url | HTTP status and response time (`curl -o /dev/null -w`). `"expect": "untrusted-cert"`: only with the pinned certificate (see «Live control») |
 | vercel | latest deployment state (Vercel CLI or MCP) |
 | runpod | running pods and their hourly cost (RunPod MCP, read-only) |
 
@@ -315,7 +356,20 @@ The user's decision of 2026-11-06: every project and service in the config is li
 - With the Herdr panel installed (see below), the status lives there: never end a reply with status lines (the user's decision of 2026-11-12). Without it, every reply ends, before the 🔊 line, with one status line per project from `bin/status --line`, also for projects we did not talk about.
 - Herdr (optional): `bin/genius herdr install [--show]` adds the layout `genius`, Herdr's `main` with a right column of three shelves: attention (the workflow: problems and waits for the user), projects, operations (mod `herdr/genius-status`, data from `bin/status --json`), a shelf «Requests» in the left sidebar (agents and sub-agents that wait for an answer or have finished, live from Herdr), and a status bar with live CPU and RAM, Claude's model, context and usage limits, and a 🔊/🔇 switch (mod `herdr/genius-footer`). The panel is quiet when all is well: it shows problems and waits for the user, and posts a Herdr toast when something changes. Claude's numbers come from the status line command `bin/lib/statusline.py`, which saves them (`state/claude-status.json`, and `state/claude/<folder>.json` per session folder) and prints nothing. The footer shows the model and context of the active space's session; the usage limits are the account's. `.claude/settings.json` sets it for this folder; `bin/genius herdr claude on` sets it in the user's own `~/.claude/settings.json` for every session (never over an existing status line; ask the user first). Install copies the code into Herdr's folder; run it again after a change in `herdr/`. The SessionStart hook runs `bin/genius herdr sync`, which installs again only when `herdr/` or Herdr's `main` layout changed. Never restart Herdr (the user's decision of 2026-11-12). `uninstall` removes it.
 - Pause: `bin/genius pause <name|tag>` and `resume` (the ⏸/▶ on a card of the Herdr panel runs the same). A paused project is not checked, not reported, and dimmed on the panel.
-- Never check TLS loosely: an untrusted certificate is reported as such; it is info only when the service has `"expect": "untrusted-cert"`.
+- Never check TLS loosely: no `curl -k` or `-sk` (auto mode blocks them too). An untrusted certificate is a problem, unless the service has `"expect": "untrusted-cert"` (a server before its public launch).
+  - Pin such a certificate once: `bin/status --pin "<service name>"` stores it in `state/certs/<name>.pem` (personal). Compare the printed SHA-256 fingerprint with the server.
+  - From then on, `bin/status` trusts only that certificate. Every operation `check` for it uses `curl --cacert state/certs/<name>.pem --resolve <host>:443:<ip> <url>` (`--resolve` only before DNS points to the server).
+  - «certificate is not the pinned one» is a problem: report it, never re-pin without the user.
+- GitHub outages: a failed run with «This run likely failed because of a workflow file issue», or many failed runs at once, can be GitHub itself. `bin/status` reads https://www.githubstatus.com (component «Actions»); during an outage it prints a «🐙 GitHub» line and marks failed runs «maybe GitHub, not the code». Report the incident; change no code for it; re-run after GitHub resolves it.
+
+## Load on this computer
+
+The lesson of 2026-11-09: the user works on the same Mac. Keep the load low.
+
+- Run tests single-threaded by default: `jest --runInBand`, `vitest --maxWorkers=1`, `turbo run <task> --concurrency=1`, `playwright test --workers=1`, `COMPOSE_PARALLEL_LIMIT=1 docker compose …`.
+- At most one heavy local stack (docker compose, dev servers, a browser test run) at a time. Stop it after use.
+- At most one subagent runs heavy commands at a time.
+- More parallel work only when the user asks for it.
 
 ## Resources: stop what nobody uses
 
@@ -359,6 +413,7 @@ A long operation must survive the end of a session.
 - The SessionStart hook injects the list first. In the first reply: report each one, run its `check`, then continue or close it.
 - When the user ends the day («завтра продовжимо»): pause what waits for the user, write `state/handoff.md` (what is done, what is paused, what is next, per project). The SessionStart hook injects it first.
 - Work of a subagent in a scratchpad worktree: commit often; the scratchpad can be removed after the session, a commit on the branch stays.
+- A git worktree has no husky hooks (`.husky/_` is not there), so pre-push checks do not run. Before `git push` from a worktree, run the repo's pre-push suite yourself (`.husky/pre-push`, or the matching `package.json` script), with the «Load» limits. Push only when it passes.
 
 ## Many projects: labels and what is spoken
 

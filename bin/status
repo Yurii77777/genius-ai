@@ -9,12 +9,24 @@ A project with "paused" in its project.json is not checked and not printed; --js
 
 Per project: git branch, uncommitted files, ahead/behind upstream, open PRs, failed runs since the
 last success, the running workflows, its URL services, and its pending operations (state/operations.json).
+Once per run: GitHub's own status (githubstatus.com, component «Actions»): during an outage a failed run
+is marked as «maybe GitHub, not the code».
+
+    bin/status --pin "<service name>"   fetch and store the certificate of a service with
+                          "expect": "untrusted-cert" (state/certs/<name>.pem), print its SHA-256 fingerprint
+
+TLS is never switched off (no curl -k; Claude Code auto mode blocks it too). A server before its public
+launch has a self-signed certificate: pin it once with --pin, then the check trusts only that one
+certificate (curl --cacert state/certs/<name>.pem). "resolve": "<ip>" in the service checks the name
+on that IP before DNS points to it (curl --resolve). The pinned file is personal data (state/).
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -22,10 +34,14 @@ ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 WORDS = {
     "uk": {"branch": "гілка", "dirty": "незбережено", "running": "іде", "missing": "шляху немає",
            "no_answer": "немає відповіді", "cert": "сертифікат не довірений",
-           "after": "після", "before": "до", "known": "відома, в роботі"},
+           "after": "після", "before": "до", "known": "відома, в роботі",
+           "unpinned": "не закріплений: bin/status --pin", "changed": "сертифікат не той, що закріплений",
+           "gh_outage": "збій GitHub Actions", "maybe_gh": "можливо, збій GitHub, а не код"},
     "en": {"branch": "branch", "dirty": "uncommitted", "running": "running", "missing": "path missing",
            "no_answer": "no answer", "cert": "certificate not trusted",
-           "after": "after", "before": "before", "known": "known, in progress"},
+           "after": "after", "before": "before", "known": "known, in progress",
+           "unpinned": "not pinned: bin/status --pin", "changed": "certificate is not the pinned one",
+           "gh_outage": "GitHub Actions outage", "maybe_gh": "maybe GitHub, not the code"},
 }
 W = WORDS["en"]
 
@@ -92,6 +108,68 @@ def release_window(rule):
     return {"open": after <= hm < before, "text": text}
 
 
+CERTS = os.path.join(ROOT, "state", "certs")
+
+
+def cert_file(service):
+    return os.path.join(CERTS, re.sub(r"[^A-Za-z0-9._-]+", "-", service["name"]).strip("-") + ".pem")
+
+
+def curl_check(s):
+    """A pinned certificate and/or a fixed IP: curl checks TLS against that file only (never -k)."""
+    u = urllib.parse.urlsplit(s["url"])
+    args = ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "10"]
+    if os.path.exists(cert_file(s)):
+        args += ["--cacert", cert_file(s)]
+    if s.get("resolve"):
+        args += ["--resolve", f"{u.hostname}:{u.port or 443}:{s['resolve']}"]
+    try:
+        r = subprocess.run(args + [s["url"]], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
+    if r.returncode in (35, 51, 58, 60, 77, 83, 90, 91):   # TLS: the certificate does not match the pinned one
+        return "changed" if os.path.exists(cert_file(s)) else "cert"
+    return int(r.stdout or 0) if r.returncode == 0 else 0
+
+
+def pin(name):
+    """Fetch the certificate chain the server shows and store it as the only trusted one for this service."""
+    cfg = read_json(os.path.join(ROOT, "genius.config.json"), {})
+    s = next((x for x in cfg.get("services") or [] if x.get("name") == name), None)
+    if not s or not s.get("url", "").startswith("https://"):
+        print(f"no https service named «{name}» in genius.config.json")
+        return 2
+    u = urllib.parse.urlsplit(s["url"])
+    target = f"{s.get('resolve') or u.hostname}:{u.port or 443}"
+    r = subprocess.run(["openssl", "s_client", "-connect", target, "-servername", u.hostname, "-showcerts"],
+                       input="", capture_output=True, text=True, timeout=20)
+    pems = re.findall(r"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", r.stdout, re.S)
+    if not pems:
+        print(f"no certificate from {target}: {r.stderr.strip()[-200:]}")
+        return 1
+    os.makedirs(CERTS, exist_ok=True)
+    with open(cert_file(s), "w") as f:
+        f.write("\n".join(pems) + "\n")
+    info = subprocess.run(["openssl", "x509", "-noout", "-subject", "-enddate", "-fingerprint", "-sha256"],
+                          input=pems[0], capture_output=True, text=True).stdout.strip()
+    print(f"pinned {len(pems)} certificate(s) of {target} → {os.path.relpath(cert_file(s), ROOT)}\n{info}")
+    print("Compare the fingerprint with the one on the server before you trust it "
+          "(on the server: openssl x509 -in <cert> -noout -fingerprint -sha256).")
+    return 0
+
+
+def github_status():
+    """GitHub's own status page: the state of «Actions» and the open incidents. {} when unreachable."""
+    try:
+        with urllib.request.urlopen("https://www.githubstatus.com/api/v2/summary.json", timeout=8) as r:
+            d = json.load(r)
+    except Exception:
+        return {}
+    actions = next((c["status"] for c in d.get("components", []) if c.get("name") == "Actions"), "unknown")
+    incidents = [i.get("name", "?") for i in d.get("incidents", []) if i.get("status") != "resolved"]
+    return {"actions": actions, "incidents": incidents}
+
+
 def project_state(p, services, ops):
     name, path = p["name"], os.path.expanduser(p["path"])
     meta = read_json(os.path.join(ROOT, "projects", name, "project.json"), {})
@@ -153,17 +231,18 @@ def project_state(p, services, ops):
     for s in services:
         if s.get("project") == name and s.get("type") == "url":
             started = time.time()
-            code = url_check(s["url"])
+            pinned = s.get("expect") == "untrusted-cert" and os.path.exists(cert_file(s))
+            code = curl_check(s) if pinned or s.get("resolve") else url_check(s["url"])
             ms = int((time.time() - started) * 1000)
             expected_cert = code == "cert" and s.get("expect") == "untrusted-cert"
-            ok = expected_cert or (code != "cert" and 200 <= code < 400)
+            ok = expected_cert or (isinstance(code, int) and 200 <= code < 400)
             st["urls"].append({"name": s["name"], "url": s["url"], "ok": ok, "code": code, "ms": ms})
-            if code == "cert":
-                # expected only while the config says so (a server before its public launch)
-                if expected_cert:
-                    st["info"].append(f"{s['name']}: {W['cert']}")
-                else:
-                    problem(f"{s['name']}: {W['cert']}", s["url"])
+            if code == "changed":
+                problem(f"{s['name']}: {W['changed']}", s["url"])
+            elif expected_cert:
+                st["info"].append(f"{s['name']}: {W['cert']}, {W['unpinned']} \"{s['name']}\"")
+            elif code == "cert":            # not expected: the config does not say «untrusted-cert»
+                problem(f"{s['name']}: {W['cert']}", s["url"])
             elif not ok:
                 problem(f"{s['name']}: HTTP {code or W['no_answer']}", s["url"])
     return known_problems(st, mine)
@@ -190,21 +269,34 @@ def known_problems(st, mine):
 
 def main():
     global W
+    if "--pin" in sys.argv:
+        i = sys.argv.index("--pin")
+        sys.exit(pin(sys.argv[i + 1] if len(sys.argv) > i + 1 else ""))
     cfg = read_json(os.path.join(ROOT, "genius.config.json"), {})
     W = WORDS.get(cfg.get("language"), WORDS["en"])
     ops = read_json(os.path.join(ROOT, "state", "operations.json"), [])
     projects, services = cfg.get("projects") or [], cfg.get("services") or []
     with ThreadPoolExecutor(max_workers=4) as pool:
+        gh_future = pool.submit(github_status) if projects else None
         states = list(pool.map(lambda p: project_state(p, services, ops), projects))
+        gh = gh_future.result() if gh_future else {}
     # `rank` in projects/<name>/project.json sets the order the user wants (1 first; the user's
     # decision of 2026-11-12: the focus project comes first in Attention and on the panel);
     # without it, the core project first, then the rest.
     states.sort(key=lambda s: (s["paused"], s["rank"] if s["rank"] is not None else 99,
                                s["priority"] != "core", not s["problems"]))
+    outage = gh.get("actions") not in (None, "operational", "unknown")
+    if outage:                                  # a failed run during an outage is not proof of a code bug
+        for s in states:
+            s["problems"] = [x + f" ({W['maybe_gh']})" if x.startswith("main: ") else x for x in s["problems"]]
     if "--json" in sys.argv:
         json.dump(states, sys.stdout, ensure_ascii=False, indent=2)
         print()
         return
+    if outage:
+        print(f"🐙 GitHub · {W['gh_outage']}: Actions {gh['actions']}"
+              + (" · " + "; ".join(gh["incidents"][:2]) if gh["incidents"] else "")
+              + " · https://www.githubstatus.com")
     for s in states:
         if s["paused"]:             # silent in text; the Herdr panel (--json) shows it dimmed
             continue

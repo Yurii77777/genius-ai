@@ -1,0 +1,17 @@
+#!/bin/zsh
+# dictate-test — F5 permissions and a safe self-test of the real F5 path. Changes no setting itself.
+#   dictate-test                 status, then: press F5, say a phrase → each stage ✅/⛔ with the fix
+#   dictate-test --status        only the status (same as voice/bin/doctor --dictation, permissions part)
+#   dictate-test --open fda|mic|ax|auto   open that System Settings pane; for fda/ax also show the binary in Finder
+#   dictate-test --ask           the F5 listener asks once for the missing permissions (system dialogs)
+# Test mode is safe: nothing is typed into any window and Enter is not pressed. voice/bin/dictate
+# taps only Shift (it types nothing) to prove Automation + Accessibility, and leaves the text in
+# the clipboard: the user pastes it with ⌘V where they want. Details: voice/lib/dictate_perms.py.
+lib="${0:A:h:h}/lib/dictate_perms.py"
+case "${1:-}" in
+  --status) exec /usr/bin/python3 "$lib" status ;;
+  --open)   exec /usr/bin/python3 "$lib" open "${2:-}" ;;
+  --ask)    exec /usr/bin/python3 "$lib" ask ;;
+  "")       exec /usr/bin/python3 "$lib" test ;;
+  *)        sed -n '2,9p' "$0"; exit 2 ;;
+esac

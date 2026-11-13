@@ -25,6 +25,26 @@ for a in "$@"; do
     *) lang=$a ;;
   esac
 done
+# self-test (voice/bin/dictate-test writes voice/run/selftest with an expiry time): nothing is typed
+# into a window and Enter is not pressed; the text goes to the clipboard only
+selftest=0
+[[ -f $run/selftest ]] && (( $(<"$run/selftest") > $(date +%s) )) && selftest=1
+# what happened in this take, for voice/bin/doctor and dictate-test (voice/run/last-take.json;
+# the text itself is kept only in a self-test)
+take() {
+  /usr/bin/python3 -c 'import json, sys, time
+d = dict(a.split("=", 1) for a in sys.argv[2:]); d["time"] = int(time.time())
+json.dump(d, open(sys.argv[1], "w"), ensure_ascii=False)' "$run/last-take.json" \
+    mode=$( (( selftest )) && echo test || echo use ) "$@"
+}
+# the permission behind an osascript error, in the user's words
+why_paste() {
+  case $1 in
+    *-1743*|*"Not authorized"*) echo automation ;;
+    *1002*|*"not allowed to send keystrokes"*|*-25211*|*assistive*) echo accessibility ;;
+    *) echo error ;;
+  esac
+}
 
 tmp=$(mktemp -d "$run/take.XXXXXX")
 rec=""
@@ -61,7 +81,11 @@ rec=$!
 print -r -- $$ >"$pidfile"
 
 start=$SECONDS
+verdict=""
 while kill -0 $rec 2>/dev/null; do
+  # no sound block after 4 s: macOS keeps the microphone from this process (no permission) —
+  # without this check the take hangs silently
+  if (( SECONDS - start >= 4 )) && ! grep -q 'RMS_level=' "$tmp/ff.log"; then verdict=hung; break; fi
   # ffmpeg's -t is not enforced when the mic delivers no timestamps: own wall-clock cap
   (( SECONDS - start >= max_s )) && { echo "⏹  ${max_s} s — stopping the recording"; break; }
   (( stop )) && break
@@ -80,18 +104,35 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 $rec 2>/dev/null || break; sleep 0.2; 
 kill -9 $rec 2>/dev/null; wait $rec 2>/dev/null; rec=""
 rm -f "$pidfile"
 cp "$tmp/ff.log" "$run/last-ff.log" 2>/dev/null
-[[ $verdict == idle ]] && { echo "🤐 heard nothing"; note "🤐 Heard nothing"; exit 0; }
+if [[ $verdict == hung ]] || ! grep -q 'RMS_level=' "$tmp/ff.log"; then
+  take mic=hung
+  echo "⛔ the microphone gives no sound: macOS did not allow recording. Check: voice/bin/dictate-test"
+  note "⛔ Microphone blocked — voice/bin/dictate-test"
+  exit 1
+fi
+[[ $verdict == idle ]] && { take mic=silent; echo "🤐 heard nothing"; note "🤐 Heard nothing"; exit 0; }
 sound Pop; note "⏳ Transcribing…"
 
 echo "⏳ Transcribing…"
 if ! /usr/bin/python3 "$voice/lib/stt_client.py" "$tmp/in.wav" "$lang" >"$tmp/in.txt" 2>"$tmp/w.log"; then
-  sound Basso; note "❌ Transcription failed"
+  sound Basso; note "❌ Transcription failed"; take mic=ok stt=fail
   echo "❌ transcription failed:"; tail -5 "$tmp/w.log"; exit 1
 fi
 
 text=$(tr '\n' ' ' < "$tmp/in.txt" | sed 's/  */ /g; s/^ //; s/ $//')
 detected=$(grep '^LANG ' "$tmp/w.log" | tail -1 | cut -d' ' -f2)
-[[ -z $text ]] && { echo "🤐 heard nothing"; note "🤐 Heard nothing"; exit 0; }
+[[ -z $text ]] && { take mic=ok stt=empty; echo "🤐 heard nothing"; note "🤐 Heard nothing"; exit 0; }
+
+if (( selftest )); then
+  # Shift alone types nothing in any app, yet it needs the same Automation + Accessibility as ⌘V
+  err=$(osascript -e 'tell application "System Events" to key code 56' 2>&1 >/dev/null)
+  result=ok; [[ -n $err ]] && result=$(why_paste "$err")
+  print -rn -- "$text" | pbcopy
+  take mic=ok stt=ok paste=$result "text=$text" "paste_error=$err"
+  note "🧪 Test: «$text» — in the clipboard (⌘V)"
+  echo "🧪 [$detected] $text  (paste probe: $result)"
+  exit 0
+fi
 
 # Herdr in front: send straight into the focused pane's terminal (hc send), never Cmd+V into
 # whatever holds the keyboard — a panel or a peek swallowed the text (2026-11-12). No terminal
@@ -117,12 +158,21 @@ elif (( paste )); then
   # in Herdr the input may hold the user's typed draft: a leading space keeps the words apart
   [[ $how == paste ]] && text=" $text"
   print -rn -- "$text" | pbcopy
-  osascript -e 'tell application "System Events" to keystroke "v" using command down' >/dev/null
+  err=$(osascript -e 'tell application "System Events" to keystroke "v" using command down' 2>&1 >/dev/null)
+  if [[ -n $err ]]; then
+    # the paste was refused: keep the text in the clipboard and say which permission is missing
+    take mic=ok stt=ok paste=$(why_paste "$err") "paste_error=$err"
+    note "⛔ Not pasted ($(why_paste "$err")). The text is in the clipboard: ⌘V. Check: voice/bin/dictate-test"
+    echo "⛔ paste failed ($(why_paste "$err")): $err"; echo "🗣 [$detected] $text"
+    exit 1
+  fi
   sleep 0.3
   # …and send it as your message (Enter), unless DICTATE_SEND=0
   [[ ${DICTATE_SEND:-1} == 1 ]] && osascript -e 'tell application "System Events" to key code 36' >/dev/null
   print -rn -- "$old" | pbcopy
+  take mic=ok stt=ok paste=ok
 else
   print -rn -- "$text" | pbcopy
+  take mic=ok stt=ok paste=skipped
 fi
 echo "🗣 [$detected] $text"
