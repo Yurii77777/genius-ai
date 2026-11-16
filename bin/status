@@ -170,6 +170,57 @@ def github_status():
     return {"actions": actions, "incidents": incidents}
 
 
+def blocked_tickets(name, tracker):
+    """Tickets of a project's tracker that stand blocked: [(key, status, summary, url)].
+
+    The user's decision of 2026-11-16: a blocked ticket is a problem, red and on top of Attention like a
+    failed CI run. `projects/<name>/project.json`:
+        "tracker": {"type": "jira", "blocked_jql": "project = X AND status in (Blocked)", "env_file": "~/path/to/.env"}
+    Credentials are JIRA_URL, JIRA_USERNAME, JIRA_API_TOKEN from the environment, else from `env_file`
+    (KEY=value lines); none is ever written to the config. Read-only, and cached for two minutes in
+    state/tracker-cache.json: the panel asks often, the tracker must not be."""
+    if not isinstance(tracker, dict) or tracker.get("type") != "jira" or not tracker.get("blocked_jql"):
+        return []
+    cache_path = os.path.join(ROOT, "state", "tracker-cache.json")
+    cache = read_json(cache_path, {})
+    hit = cache.get(name)
+    if hit and hit.get("jql") == tracker["blocked_jql"] and time.time() - hit.get("at", 0) < 120:
+        return [tuple(r) for r in hit.get("rows", [])]
+    env = {k: os.environ.get(k, "") for k in ("JIRA_URL", "JIRA_USERNAME", "JIRA_API_TOKEN")}
+    if not all(env.values()) and tracker.get("env_file"):
+        try:
+            with open(os.path.expanduser(tracker["env_file"]), encoding="utf-8") as f:
+                for line in f:
+                    m = re.match(r"\s*(?:export\s+)?(JIRA_URL|JIRA_USERNAME|JIRA_API_TOKEN)\s*=\s*(.*)", line)
+                    if m and not env[m.group(1)]:
+                        env[m.group(1)] = m.group(2).strip().strip("\"'")
+        except OSError:
+            pass
+    if not all(env.values()):
+        return [tuple(r) for r in (hit or {}).get("rows", [])]
+    import base64
+    base = env["JIRA_URL"].rstrip("/")
+    query = urllib.parse.urlencode({"jql": tracker["blocked_jql"], "fields": "summary,status", "maxResults": 50})
+    req = urllib.request.Request(f"{base}/rest/api/3/search/jql?{query}", headers={
+        "Accept": "application/json",
+        "Authorization": "Basic " + base64.b64encode(f"{env['JIRA_USERNAME']}:{env['JIRA_API_TOKEN']}".encode()).decode()})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            issues = json.load(r).get("issues", [])
+    except (OSError, ValueError):
+        return [tuple(r) for r in (hit or {}).get("rows", [])]   # the tracker did not answer: keep the last answer
+    rows = [(i["key"], i["fields"]["status"]["name"], i["fields"].get("summary") or "", f"{base}/browse/{i['key']}")
+            for i in issues]
+    cache[name] = {"at": time.time(), "jql": tracker["blocked_jql"], "rows": rows}
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except OSError:
+        pass
+    return rows
+
+
 def project_state(p, services, ops):
     name, path = p["name"], os.path.expanduser(p["path"])
     meta = read_json(os.path.join(ROOT, "projects", name, "project.json"), {})
@@ -190,6 +241,13 @@ def project_state(p, services, ops):
 
     if st["paused"]:                # the user paused it: no git, GitHub or URL checks, no reports
         return st
+    # Blocked tickets of the project's tracker: each one is a problem (red, on top of Attention). An
+    # operation that «covers» the ticket's key moves it to «known, in progress» like any other problem.
+    blocked = blocked_tickets(name, meta.get("tracker"))
+    for key, status, summary, url in blocked[:6]:
+        problem(f"🚫 {key}: {status} — {summary[:70]}", url)
+    if len(blocked) > 6:
+        problem(f"🚫 +{len(blocked) - 6} blocked: {', '.join(r[0] for r in blocked[6:16])}", "")
     if not os.path.isdir(path):
         problem(f"{W['missing']}: {p['path']}")
         return st

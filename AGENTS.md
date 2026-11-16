@@ -424,6 +424,7 @@ The user's decision of 2026-11-06. With many projects, the user must hear only w
 - Each project has a label in `projects/<name>/project.json`: `{ "tag": "🌐 LW", "spoken": "Сайт" }`. Not in the config.
 - Optional there: `"rank": 1` — the order of projects in Attention, on the panel and in reports (1 first); the focus project gets 1 (the user's decision of 2026-11-12: Chica first until its launch).
 - Optional there: `"release": { "after": "19:00", "before": "23:00", "tz": "Europe/Kyiv" }`, only when the project's documents state a release window (the panel shows «release open / closed»); `"paused": {...}` while the user paused the project (dimmed, silent).
+- Optional there: `"tracker": { "type": "jira", "blocked_jql": "<JQL of the tickets that stand blocked>", "env_file": "~/path/to/.env" }` — `bin/status` shows each such ticket as a problem: red and on top of Attention, like a failed CI run (the user's decision of 2026-11-16). Credentials come from the environment or `env_file` (`JIRA_URL`, `JIRA_USERNAME`, `JIRA_API_TOKEN`), never from the config. An operation that `covers` the ticket's key shows it as «known, in progress».
 - Choose the label when you connect the project; the user can change it.
 
 ### Text
