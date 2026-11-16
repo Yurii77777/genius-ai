@@ -199,7 +199,17 @@ export default class GeniusStatus extends View {
   attentionRows(states) {
     const live = states.filter((s) => !s.paused);
     const problems = live.flatMap((s) => s.problems.map((text, i) => ({ id: `${s.name}-p${i}`, tag: s.tag, text, url: s.problem_urls?.[i] })));
-    const waits = live.flatMap((s) => (s.ops_detail ?? []).filter((o) => o.needs_user && !o.paused).map((o) => ({ id: `${s.name}-${o.id}`, tag: s.tag, op: o })));
+    // Every task, not only the waits (the user's decision of 2026-11-15: «тут мали б бути всі задачі
+    // коректно відсортовані»): 👤 waits for the user, then 🔄 in work, then 📋 next tasks ("queue":
+    // "next"); inside a group by the project's rank. Paused operations stay out.
+    const byRank = [...live].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+    const pick = (test, kind) => byRank.flatMap((s) => (s.ops_detail ?? []).filter((o) => !o.paused && test(o))
+      .map((o) => ({ id: `${s.name}-${o.id}`, tag: s.tag, op: o, kind })));
+    const waits = [
+      ...pick((o) => o.needs_user, "you"),
+      ...pick((o) => !o.needs_user && o.queue !== "next", "work"),
+      ...pick((o) => !o.needs_user && o.queue === "next", "next"),
+    ];
     return { problems, waits };
   }
 
@@ -238,7 +248,9 @@ export default class GeniusStatus extends View {
           .child(div().flex_1().min_w(0).truncate().text_color(t.foreground).child(r.op.what))
           .child(div().id(`aa-${r.id}`).flex_none().px(4).rounded(4).cursor_pointer().hover((s) => s.bg(t.hover))
             .tooltip(w.ask).on_click(() => this.ask(r.op, w)).child("💬")))
-        .when(Boolean(r.op.waiting_for), (el) => el.child(div().truncate().text_size(11.5).text_color(t.working).child(`👤 ${r.op.waiting_for}`)))),
+        .when(Boolean(r.op.waiting_for), (el) => el.child(div().truncate().text_size(11.5)
+          .text_color(r.kind === "you" ? t.working : t.dim)
+          .child(`${r.kind === "you" ? "👤" : r.kind === "work" ? "🔄" : "📋"} ${r.op.waiting_for}`)))),
     ];
   }
 

@@ -17,6 +17,11 @@ For each sub-agent (a Herdr terminal with a parent) one pass does this:
 - The agent works, and its screen did not change for HUNG_AFTER s → one alert «hung».
 - An API error (the Mac slept mid-answer) → it is told once per turn to continue.
 - The agent works again or is gone → its watch operation is closed.
+- Dev servers (the user's decision of 2026-11-15: «потрібно контролювати, щоб агенти вчасно гасили
+  після себе»): every listening port 4300–4399 is matched to its agent by state/ports.json (the
+  coordinator writes the port block into each brief and into this file). Its agent idle for
+  SERVER_IDLE → told once per turn to stop its servers; its agent gone → the server is stopped here;
+  a port with no owner → one line to the coordinator.
 """
 import hashlib
 import json
@@ -36,6 +41,8 @@ EVERY = 30
 SEND_AFTER = 60
 WAIT_AFTER = 120
 HUNG_AFTER = 15 * 60
+SERVER_IDLE = 5 * 60        # an agent idle this long with its dev server still up → told to stop it
+PORTS = os.path.join(ROOT, "state", "ports.json")   # {"4310": "<tag>-<task>", "4300": "coordinator", ...}
 RESUME = ("The previous answer broke off (API error, e.g. the Mac slept). Continue the task from where you "
           "stopped: first check the branch, the tests and the running processes.")
 
@@ -153,6 +160,7 @@ def watch():
             continue
         seen.add(name)
         s = st.setdefault(name, {})
+        s["turn"] = t.get("turn")
         status = t.get("status")                    # `hc ls` gives a word; `hc get` an object
         status = status.get("state") if isinstance(status, dict) else status
         screen = sh(["hc", "read", name])
@@ -220,14 +228,56 @@ def watch():
             with open(os.path.join(AGENTS_DIR, f"{name}.md"), "w") as f:
                 f.write(f"# {name} — {datetime.now().isoformat(timespec='minutes')}\n\n{last_message(screen)}\n")
             set_op(name, project, f"{tag} {name}: {W['waits'].format(n=name)}".strip(), True)
-            alert(t, W["waits"].format(n=name) + f" (state/agents/{name}.md)", spoken, cfg)
+            # An agent that finished its turn is not news for the chat (the user's decision of
+            # 2026-11-15: «тут і чату просто сиплеться спам»): only the report file and the panel.
+            # The chat gets a line only when an agent asks (a dialog) or hangs.
 
+    parent = next((t.get("parent") for t in data.get("terminals", []) if t.get("parent")), None)
+    servers(st, seen, parent)
     for name in list(st):                           # gone: close its watch operation
+        if name.startswith("_"):
+            continue
         if name not in seen:
             if st[name].get("alerted"):
                 set_op(name, None, None, False)
             del st[name]
     write(STATE, st)
+
+
+def listening_ports():
+    """{port: [pid, …]} for TCP listeners on 4300–4399."""
+    out = sh(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"]) or ""
+    ports = {}
+    for line in out.splitlines()[1:]:
+        m = re.search(r":(43\d\d)\s*\(LISTEN\)", line)
+        if m:
+            ports.setdefault(m.group(1), set()).add(int(line.split()[1]))
+    return ports
+
+
+def servers(st, live, parent):
+    owners = read(PORTS, {})
+    now = time.time()
+    told = st.setdefault("_servers", {})
+    for port, pids in sorted(listening_ports().items()):
+        owner = owners.get(port)
+        if owner == "coordinator":
+            continue
+        if not owner:
+            if not told.get(f"unknown-{port}") and parent:
+                told[f"unknown-{port}"] = now
+                sh(["hc", "send", parent, f"[agents-watch] port {port}: a dev server with no owner in state/ports.json (pid {', '.join(map(str, sorted(pids)))})"], timeout=60)
+            continue
+        if owner not in live:                       # its agent is gone: stop the leftover
+            for pid in pids:
+                sh(["kill", str(pid)])
+            print(f"{datetime.now().isoformat(timespec='seconds')} stopped port {port} of gone agent {owner}")
+            continue
+        a = st.get(owner, {})
+        idle = a.get("idle")
+        if idle and now - idle >= SERVER_IDLE and told.get(owner) != a.get("turn"):
+            told[owner] = a.get("turn")
+            sh(["hc", "send", owner, f"[agents-watch] Твій dev-сервер на порту {port} працює, а ти вже {int((now - idle) // 60)} хв без роботи. Зупини свої сервери й Storybook зараз (правило власника: гасити одразу після показу чи e2e)."], timeout=60)
 
 
 def job(action):

@@ -233,11 +233,26 @@ def project_state(p, services, ops):
           # for the Herdr panel: "needs": "user" marks an operation that waits for the user's own action
           "ops_detail": [{"id": o.get("id", ""), "what": o["what"], "waiting_for": o.get("waiting_for", ""),
                           "next": o.get("next", ""), "started": o.get("started", ""), "needs_user": o.get("needs") == "user",
+                          "queue": o.get("queue", ""),
                           "paused": bool(o.get("paused"))} for o in mine]}
 
     def problem(text, url=""):
         st["problems"].append(text)
         st["problem_urls"].append(url)
+
+    # Tool limits (the user's decision of 2026-11-15: «чому ліміт Codex не червоним в Attention?»):
+    # state/limits.json [{"tool": "Codex", "until": "<ISO>", "project": "<name>", "note": "..."}];
+    # an active one is a problem of its project until `until` passes.
+    from datetime import datetime as _dt
+    for lim in read_json(os.path.join(ROOT, "state", "limits.json"), []):
+        if lim.get("project") != name:
+            continue
+        try:
+            until = _dt.fromisoformat(lim["until"])
+        except (KeyError, ValueError):
+            continue
+        if until > _dt.now(until.tzinfo):
+            problem(f"⛔ {lim.get('tool', '?')}: ліміт до {until.strftime('%H:%M')} — {lim.get('note', 'генерації стоять')}")
 
     if st["paused"]:                # the user paused it: no git, GitHub or URL checks, no reports
         return st
