@@ -106,6 +106,9 @@ New hooks and settings work from the next session.
 | `bin/status` | live state of all projects, problems first |
 | `bin/status --line` | one line per project |
 | `bin/status --json` | machine-readable state |
+| `bin/heavy <who> -- <command>` | one heavy run at a time; the Herdr panel shows the queue |
+| `bin/genius focus "<focus>" "<step>" …` | the focus of the day on top of the Herdr panel |
+| `bin/genius hold <name\|tag> [why]` · `unhold` | «take nothing new» for a project |
 | `bin/genius save <folder>` | pack your personal data into a private archive outside genius-ai |
 | `bin/genius restore <archive>` | unpack a save into a clean install and bind it to this Mac |
 | `bin/genius new` | start fresh; the old personal data moves to `backup/<date>/` (nothing is deleted) |

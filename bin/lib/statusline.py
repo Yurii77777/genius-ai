@@ -6,6 +6,8 @@ line command. This keeps it for the Herdr footer (herdr/genius-footer):
   state/claude/<folder>.json        the latest one of the session in that folder; <folder> is the
                                     session's folder with every other character than a-z A-Z 0-9 as "-"
 Every space has its own session, model and context: the footer shows the one of the active space.
+It also revives the background jobs of genius-ai (bin/lib/workers.py): the status line runs often, so a
+Herdr restart that stopped them is repaired without waiting for a new session.
 It serves this project (.claude/settings.json) and, after `bin/genius herdr claude on`, every
 Claude Code session of the user. It prints nothing, so the terminal looks as before.
 """
@@ -33,5 +35,8 @@ try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         os.replace(tmp, os.path.join(ROOT, "state", "claude", name))
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    import workers                                   # a Herdr restart stops them; no SessionStart hook runs
+    workers.spawn(ROOT)                              # at most once per CHECK_EVERY, in its own process
 except Exception:
     pass

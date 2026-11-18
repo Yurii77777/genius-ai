@@ -5,7 +5,13 @@
     bin/status --line     one short line per project (for the end of a reply)
     bin/status --json     machine-readable (the Herdr panel)
 
+A project's open PRs are checked with one `gh pr list`: a conflicting PR (mergeable CONFLICTING /
+DIRTY) is a problem «⚔️ PR #N», a PR behind its base with no update for "stale_pr_days" (project.json,
+default 3) is a note. Self-check: python3 -I bin/status --selftest
+
 A project with "paused" in its project.json is not checked and not printed; --json keeps it, marked.
+"hold" there (the user's «take nothing new») only marks the card. "card": {"cmd": …} adds the lines of
+the project's own read-only command to its card.
 
 Per project: git branch, uncommitted files, ahead/behind upstream, open PRs, failed runs since the
 last success, the running workflows, its URL services, and its pending operations (state/operations.json).
@@ -36,12 +42,14 @@ WORDS = {
            "no_answer": "немає відповіді", "cert": "сертифікат не довірений",
            "after": "після", "before": "до", "known": "відома, в роботі",
            "unpinned": "не закріплений: bin/status --pin", "changed": "сертифікат не той, що закріплений",
-           "gh_outage": "збій GitHub Actions", "maybe_gh": "можливо, збій GitHub, а не код"},
+           "gh_outage": "збій GitHub Actions", "maybe_gh": "можливо, збій GitHub, а не код",
+           "conflict": "конфлікт з", "stale": "застарів", "days": "дн."},
     "en": {"branch": "branch", "dirty": "uncommitted", "running": "running", "missing": "path missing",
            "no_answer": "no answer", "cert": "certificate not trusted",
            "after": "after", "before": "before", "known": "known, in progress",
            "unpinned": "not pinned: bin/status --pin", "changed": "certificate is not the pinned one",
-           "gh_outage": "GitHub Actions outage", "maybe_gh": "maybe GitHub, not the code"},
+           "gh_outage": "GitHub Actions outage", "maybe_gh": "maybe GitHub, not the code",
+           "conflict": "conflict with", "stale": "stale", "days": "d"},
 }
 W = WORDS["en"]
 
@@ -221,24 +229,160 @@ def blocked_tickets(name, tracker):
     return rows
 
 
+PR_FIELDS = "number,url,isDraft,mergeable,mergeStateStatus,updatedAt,baseRefName"
+
+
+def open_prs(repo, env):
+    """Open PRs of a repo with the fields the conflict check needs: ONE `gh pr list` call, cached for
+    two minutes in state/pr-cache.json (the panel asks often). GitHub computes `mergeable` lazily:
+    a PR with UNKNOWN is asked again once, alone (`gh pr view`), after a short wait. None when gh fails."""
+    cache_path = os.path.join(ROOT, "state", "pr-cache.json")
+    cache = read_json(cache_path, {})
+    hit = cache.get(repo) or {}
+    if time.time() - hit.get("at", 0) < 120 and isinstance(hit.get("prs"), list):
+        return hit["prs"]
+    out = sh("gh", "pr", "list", "--repo", repo, "--state", "open", "--limit", "100", "--json", PR_FIELDS, env=env)
+    try:
+        prs = json.loads(out) if out else None
+    except ValueError:
+        prs = None
+    if prs is None:
+        return hit.get("prs")          # gh failed: the last answer, or nothing
+    unknown = [x for x in prs if x.get("mergeable") == "UNKNOWN"]
+    if unknown:
+        time.sleep(2)
+        for x in unknown:
+            again = sh("gh", "pr", "view", str(x["number"]), "--repo", repo, "--json",
+                       "mergeable,mergeStateStatus", env=env)
+            try:
+                x.update(json.loads(again))
+            except ValueError:
+                pass
+    cache[repo] = {"at": time.time(), "prs": prs}
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except OSError:
+        pass
+    return prs
+
+
+def pr_findings(prs, stale_days=3, now=None):
+    """(problems, notes) from the open PRs. problems: [(text, url, data)]; data = {"kind": "pr_conflict",
+    "number", "base"} (the panel's «resolve» button; the caller adds "repo").
+    Conflict = mergeable CONFLICTING or mergeStateStatus DIRTY. UNKNOWN (still not computed after the
+    retry) is skipped silently, never shown as a conflict. Stale = no update for `stale_days` days AND
+    mergeStateStatus BEHIND (the head is behind its base); a conflicting PR is only a problem."""
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    problems, notes = [], []
+    for x in prs or []:
+        n, base, url = x.get("number"), x.get("baseRefName") or "?", x.get("url", "")
+        if x.get("mergeable") == "CONFLICTING" or x.get("mergeStateStatus") == "DIRTY":
+            problems.append((f"⚔️ PR #{n}: {W['conflict']} {base}", url,
+                             {"kind": "pr_conflict", "number": n, "base": base}))
+            continue
+        if x.get("mergeStateStatus") != "BEHIND":
+            continue
+        try:
+            age = (now - datetime.fromisoformat(x["updatedAt"].replace("Z", "+00:00"))).days
+        except (KeyError, ValueError):
+            continue
+        if age > stale_days:
+            notes.append(f"🕸 PR #{n}: {W['stale']} ({age} {W['days']}, {base})")
+    return problems, notes
+
+
+def selftest():
+    from datetime import datetime, timezone, timedelta
+    now = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
+    ago = lambda d: (now - timedelta(days=d)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pr = lambda n, mg, ms, d=0: {"number": n, "url": f"u{n}", "mergeable": mg, "mergeStateStatus": ms,
+                                 "updatedAt": ago(d), "baseRefName": "main"}
+    prs = [pr(1, "CONFLICTING", "DIRTY"), pr(2, "MERGEABLE", "DIRTY"), pr(3, "UNKNOWN", "UNKNOWN", 30),
+           pr(4, "MERGEABLE", "CLEAN", 30), pr(5, "MERGEABLE", "BEHIND", 5), pr(6, "MERGEABLE", "BEHIND", 1),
+           pr(7, "CONFLICTING", "DIRTY", 9)]
+    global W
+    W = WORDS["uk"]
+    problems, notes = pr_findings(prs, 3, now)
+    assert [(t, u) for t, u, _ in problems] == [("⚔️ PR #1: конфлікт з main", "u1"), ("⚔️ PR #2: конфлікт з main", "u2"),
+                                              ("⚔️ PR #7: конфлікт з main", "u7")], problems
+    assert problems[0][2] == {"kind": "pr_conflict", "number": 1, "base": "main"}, problems[0]
+    assert notes == ["🕸 PR #5: застарів (5 дн., main)"], notes      # #3 UNKNOWN skipped, #4 not behind, #6 fresh, #7 only a problem
+    assert pr_findings(prs, 10, now)[1] == []                         # N is a parameter (stale_pr_days)
+    assert pr_findings(None, 3, now) == ([], []) and pr_findings([], 3, now) == ([], [])
+    W = WORDS["en"]
+    assert pr_findings([pr(9, "CONFLICTING", "DIRTY")], 3, now)[0][0][0] == "⚔️ PR #9: conflict with main"
+    print("status selftest: ok")
+
+
+def op_agent(o):
+    """The sub-agent an operation follows: its `agent`, else the name in its check (`hc get <name>`)."""
+    if o.get("agent"):
+        return o["agent"]
+    m = re.search(r"\bhc (?:get|read|wait) ([\w.-]+)", o.get("check", "") or "")
+    return m.group(1) if m else ""
+
+
+def card_notes(name, card):
+    """Extra lines for a project's card from its own read-only command.
+
+    `projects/<name>/project.json`: "card": {"cmd": "<read-only command>", "every": 900}. Each line the
+    command prints (at most 4) is shown on the card, e.g. «nova-poshta: on disk 2.8.2, active 2.8.1».
+    It prints nothing when all is as it should be. Runs in the genius-ai folder with a 20 s timeout;
+    cached in state/card-cache.json for `every` seconds (default 900), and the last answer stays when
+    the command fails."""
+    if not isinstance(card, dict) or not card.get("cmd"):
+        return []
+    cache_path = os.path.join(ROOT, "state", "card-cache.json")
+    cache = read_json(cache_path, {})
+    hit = cache.get(name) or {}
+    if hit.get("cmd") == card["cmd"] and time.time() - hit.get("at", 0) < int(card.get("every") or 900):
+        return hit.get("lines", [])
+    try:
+        r = subprocess.run(["/bin/zsh", "-lc", card["cmd"]], cwd=ROOT, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return hit.get("lines", [])
+    if r.returncode != 0:
+        return hit.get("lines", [])
+    lines = [l.strip()[:120] for l in r.stdout.splitlines() if l.strip()][:4]
+    cache[name] = {"at": time.time(), "cmd": card["cmd"], "lines": lines}
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except OSError:
+        pass
+    return lines
+
+
 def project_state(p, services, ops):
     name, path = p["name"], os.path.expanduser(p["path"])
     meta = read_json(os.path.join(ROOT, "projects", name, "project.json"), {})
     mine = [o for o in ops if o.get("project") == name]
     st = {"name": name, "path": path, "tag": meta.get("tag", name), "spoken": meta.get("spoken", name),
           "priority": meta.get("priority"), "rank": meta.get("rank"), "paused": bool(meta.get("paused")),
+          # "hold": the user's «take nothing new»: still checked and reported, marked on the card
+          "hold": meta.get("hold") or None, "notes": [],
           "release": release_window(meta.get("release")),
-          "problems": [], "problem_urls": [], "known": [], "info": [], "links": {}, "urls": [],
+          "problems": [], "problem_urls": [], "problem_data": [], "known": [], "info": [], "links": {}, "urls": [],
           "ops": [o["what"] for o in mine],
           # for the Herdr panel: "needs": "user" marks an operation that waits for the user's own action
           "ops_detail": [{"id": o.get("id", ""), "what": o["what"], "waiting_for": o.get("waiting_for", ""),
                           "next": o.get("next", ""), "started": o.get("started", ""), "needs_user": o.get("needs") == "user",
                           "queue": o.get("queue", ""),
+                          # "ask": the exact short question to the user; "answers": the choices, shown as buttons
+                          "ask": o.get("ask", ""), "answers": o.get("answers") or [], "answered": o.get("answered") or None,
+                          "kind": o.get("kind", ""), "agent": op_agent(o),
                           "paused": bool(o.get("paused"))} for o in mine]}
 
-    def problem(text, url=""):
+    def problem(text, url="", data=None):
+        # `data` (optional): structure for a panel button, e.g. {"kind": "pr_conflict", "repo", "number", "base"};
+        # parallel to `problems`, None for a plain problem
         st["problems"].append(text)
         st["problem_urls"].append(url)
+        st["problem_data"].append(data)
 
     # Tool limits (the user's decision of 2026-11-15: «чому ліміт Codex не червоним в Attention?»):
     # state/limits.json [{"tool": "Codex", "until": "<ISO>", "project": "<name>", "note": "..."}];
@@ -258,6 +402,7 @@ def project_state(p, services, ops):
         return st
     # Blocked tickets of the project's tracker: each one is a problem (red, on top of Attention). An
     # operation that «covers» the ticket's key moves it to «known, in progress» like any other problem.
+    st["notes"] = card_notes(name, meta.get("card"))
     blocked = blocked_tickets(name, meta.get("tracker"))
     for key, status, summary, url in blocked[:6]:
         problem(f"🚫 {key}: {status} — {summary[:70]}", url)
@@ -282,9 +427,17 @@ def project_state(p, services, ops):
         env = gh_env(repo, services)
         st["links"] = {"repo": f"https://github.com/{repo}", "prs": f"https://github.com/{repo}/pulls",
                        "runs": f"https://github.com/{repo}/actions"}
-        prs = sh("gh", "pr", "list", "--repo", repo, "--json", "number", "-q", "length", env=env)
+        prs = open_prs(repo, env)
         if prs:
-            st["info"].append(f"PR {prs}")
+            st["info"].append(f"PR {len(prs)}")
+            try:
+                stale_days = int(meta.get("stale_pr_days", 3))
+            except (TypeError, ValueError):
+                stale_days = 3
+            conflicts, stale = pr_findings(prs, stale_days)
+            for text, url, data in conflicts:
+                problem(text, url, {**data, "repo": repo})
+            st["notes"].extend(stale)
         running = sh("gh", "run", "list", "--repo", repo, "--status", "in_progress", "--json", "name",
                      "-q", "[.[].name] | unique | join(\", \")", env=env)
         if running:
@@ -328,20 +481,22 @@ def known_problems(st, mine):
     import re
     covered = [(c, o) for o in mine if not o.get("paused") for c in
                ([o["covers"]] if isinstance(o.get("covers"), str) else o.get("covers") or [])]
-    keep, urls, known = [], [], []
-    for text, url in zip(st["problems"], st["problem_urls"]):
+    keep, urls, datas, known = [], [], [], []
+    for text, url, data in zip(st["problems"], st["problem_urls"], st["problem_data"]):
         hit = next((o for c, o in covered if c and c in text), None)
         if hit is None:
-            keep.append(text); urls.append(url); continue
+            keep.append(text); urls.append(url); datas.append(data); continue
         key = re.search(r"\b[A-Z][A-Z0-9]+-\d+\b", hit.get("what", ""))
         known.append(text)
         st["info"].append(f"{W['known']} {key.group(0) if key else hit.get('id', '')}: {text}")
-    st["problems"], st["problem_urls"], st["known"] = keep, urls, known
+    st["problems"], st["problem_urls"], st["problem_data"], st["known"] = keep, urls, datas, known
     return st
 
 
 def main():
     global W
+    if "--selftest" in sys.argv:
+        return selftest()
     if "--pin" in sys.argv:
         i = sys.argv.index("--pin")
         sys.exit(pin(sys.argv[i + 1] if len(sys.argv) > i + 1 else ""))
@@ -374,7 +529,7 @@ def main():
         if s["paused"]:             # silent in text; the Herdr panel (--json) shows it dimmed
             continue
         if "--line" in sys.argv:
-            parts = s["problems"] + s["info"][:3] + [f"⏳ {o}" for o in s["ops"][:2]]
+            parts = s["problems"] + s["notes"] + s["info"][:3] + [f"⏳ {o}" for o in s["ops"][:2]]
             print(f"{s['tag']} · " + " · ".join(parts))
             continue
         print(f"{s['tag']}  ({s['name']})" + ("  ⚠️" if s["problems"] else "  ✅"))
@@ -382,6 +537,8 @@ def main():
             print(f"  ⚠️  {x}")
         if s["info"]:
             print("  " + " · ".join(s["info"]))
+        for x in s["notes"]:
+            print(f"  📌 {x}")
         for o in s["ops"]:
             print(f"  ⏳ {o}")
 

@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""heavy — heavy runs take turns on this computer (tests, builds, browser runs, image renders).
+
+    bin/heavy <who> -- <command...>   wait for the turn, run the command, free the turn; exits with its code
+    bin/heavy --json                  who runs now and who waits (the Herdr panel)
+
+The user works on the same Mac, and every agent of every project shares it (AGENTS.md «Load on this
+computer»). An agent that waits here is visible: the panel shows the holder, the queue and the minutes.
+The turn is first come, first served. A holder or a waiter whose process died is dropped.
+How many run at once follows the load (the user's words of 2026-11-17: «коли немає генерацій і донавчання —
+руки розв'язані»): none while local model work runs; FREE_SLOTS while no local model work runs and at least
+FREE_GB of memory is free; else one.
+State: state/heavy/ (lock-<n>/ = the holder of slot n, wait-<pid>.json = a waiter); state/heavy.json is
+touched on every change, so the panel refreshes at once.
+"""
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+DIR = os.path.join(ROOT, "state", "heavy")
+POLL = 5
+FREE_SLOTS = 2
+FREE_GB = 10.0
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def snapshot():
+    """The live picture; drops what a dead process left behind."""
+    holders = []
+    for name in sorted(os.listdir(DIR)) if os.path.isdir(DIR) else []:
+        if not name.startswith("lock"):
+            continue
+        lock = os.path.join(DIR, name)
+        h = read(os.path.join(lock, "info.json"))
+        if h and alive(h.get("pid")):
+            holders.append(h)
+        elif h or time.time() - os.path.getmtime(lock) > 10:
+            # no info yet: the holder is between mkdir and its first write; give it a moment
+            shutil.rmtree(lock, ignore_errors=True)
+    waiting = []
+    for name in os.listdir(DIR) if os.path.isdir(DIR) else []:
+        if not name.startswith("wait-"):
+            continue
+        path = os.path.join(DIR, name)
+        w = read(path)
+        if w and alive(w.get("pid")):
+            waiting.append(w)
+        elif w or time.time() - os.path.getmtime(path) > 10:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    waiting.sort(key=lambda w: (w.get("since", 0), w.get("pid", 0)))
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "bin", "lib"))
+        import load
+        ml = [{"pid": p, "gb": g, "cmd": c} for p, g, c in load.ml_jobs()]
+    except Exception:
+        ml = []
+    try:
+        quiet = list(load.quiet_now())
+    except Exception:
+        quiet = ["", ""]
+    return {"holder": holders[0] if holders else None, "holders": holders, "waiting": waiting, "ml": ml,
+            "slots": slots(bool(ml)), "quiet": quiet}
+
+
+def slots(ml_busy):
+    if ml_busy:
+        return 0
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "bin", "lib"))
+        import load
+        if load.quiet_now()[0]:
+            return 0                                    # the user's meeting: nothing heavy
+    except Exception:
+        pass
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "bin", "lib"))
+        import load
+        free = load.free_gb()
+    except Exception:
+        free = None
+    return FREE_SLOTS if free is not None and free >= FREE_GB else 1
+
+
+def publish():
+    """Touch state/heavy.json: the panel watches state/ and reads the picture again."""
+    tmp = os.path.join(DIR, f".snap-{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(snapshot(), f, ensure_ascii=False)
+        os.replace(tmp, os.path.join(ROOT, "state", "heavy.json"))
+    except OSError:
+        pass
+
+
+# Cloud work is not heavy for this computer: it never waits for a slot (the user's words of 2026-11-17, when
+# icons drawn by Codex stood in the queue behind local tests). A wrapper (sh -c, bash -lc, env …) is looked into.
+CLOUD = ("codex", "ollama", "gh", "curl")
+
+
+def cloud(cmd):
+    words = " ".join(cmd).replace('"', " ").replace("'", " ").split()
+    words = [w for w in words if not (w.startswith("-") or "=" in w or w in ("sh", "bash", "zsh", "env", "exec", "npx"))]
+    return bool(words) and os.path.basename(words[0]) in CLOUD
+
+
+def run(who, cmd):
+    if cloud(cmd):                                   # straight through, no slot, no wait
+        return subprocess.run(cmd).returncode
+    os.makedirs(DIR, exist_ok=True)
+    me = {"pid": os.getpid(), "who": who, "cmd": " ".join(cmd)[:200], "since": time.time()}
+    ticket = os.path.join(DIR, f"wait-{os.getpid()}.json")
+    held = None
+
+    def leave(*_):
+        raise SystemExit(130)
+    signal.signal(signal.SIGTERM, leave)
+    signal.signal(signal.SIGHUP, leave)
+    try:
+        with open(ticket, "w", encoding="utf-8") as f:
+            json.dump(me, f, ensure_ascii=False)
+        publish()
+        said = False
+        sys.path.insert(0, os.path.join(ROOT, "bin", "lib"))
+        import load                                     # local model work (training, generation) goes first
+        while True:
+            jobs = load.ml_jobs()
+            quiet, until = load.quiet_now()
+            if quiet:
+                if not said:
+                    print(f"[heavy] {who}: waiting — quiet window «{quiet}» until {until}", file=sys.stderr, flush=True)
+                    said = True
+                time.sleep(POLL * 6)
+                continue
+            if jobs:
+                if not said:
+                    print(f"[heavy] {who}: waiting — local model work runs: {jobs[0][2][:70]} ({jobs[0][1]} GB)",
+                          file=sys.stderr, flush=True)
+                    said = True
+                time.sleep(POLL * 6)
+                continue
+            snap = snapshot()
+            free = snap["slots"] - len(snap["holders"])
+            ahead = [w["pid"] for w in snap["waiting"]][:max(free, 0)]
+            if free > 0 and me["pid"] in ahead:
+                for n in range(snap["slots"]):
+                    try:
+                        os.mkdir(os.path.join(DIR, f"lock-{n}"))
+                        held = os.path.join(DIR, f"lock-{n}")
+                        break
+                    except FileExistsError:
+                        continue
+                if held:
+                    break
+            if not said:
+                h = snap["holder"] or {}
+                print(f"[heavy] {who}: waiting — {h.get('who', '?')} runs «{h.get('cmd', '')[:80]}», "
+                      f"{len(snap['waiting'])} in the queue", file=sys.stderr, flush=True)
+                said = True
+            time.sleep(POLL)
+        me["since"] = time.time()
+        with open(os.path.join(held, "info.json"), "w", encoding="utf-8") as f:
+            json.dump(me, f, ensure_ascii=False)
+        os.remove(ticket)
+        publish()
+        return subprocess.run(cmd).returncode
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        if held:
+            shutil.rmtree(held, ignore_errors=True)
+        try:
+            os.remove(ticket)
+        except OSError:
+            pass
+        publish()
+
+
+def main():
+    args = sys.argv[1:]
+    if args == ["--json"]:
+        os.makedirs(DIR, exist_ok=True)
+        json.dump(snapshot(), sys.stdout, ensure_ascii=False)
+        print()
+        return 0
+    if len(args) >= 3 and args[1] == "--":
+        return run(args[0], args[2:])
+    sys.exit("usage: bin/heavy <who> -- <command...> | bin/heavy --json")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -13,10 +13,19 @@ For each sub-agent (a Herdr terminal with a parent) one pass does this:
   message is saved to state/agents/<name>.md, an operation with "needs": "user" goes to
   state/operations.json (Herdr «Attention» + toast), the voice says it, and the parent session
   gets one line, so it reads the report. Once per turn of the agent.
-- A permission or trust dialog → the same alert, never an answer.
+- A permission dialog of a task agent (label genius.role) → the gate decides it, like any other action
+  of that agent (the user's decision of 2026-11-17: «потрібно думати як мене розвантажити»): the action on
+  the screen goes to bin/lib/gate.py (its rules, the user's earlier decisions in the knowledge base, Claude
+  as the judge). Allow → the watcher picks the dialog's one-time «Yes»; deny or unclear → the alert to the
+  user, as before. Every answer is written to state/gate.jsonl ("via": "watcher"). A task agent's trust
+  dialog in a folder of a configured project is answered «trust» (the user's decision of 2026-11-17); a
+  trust dialog anywhere else, and a dialog of any other agent, is never answered.
 - The agent works, and its screen did not change for HUNG_AFTER s → one alert «hung».
 - An API error (the Mac slept mid-answer) → it is told once per turn to continue.
 - The agent works again or is gone → its watch operation is closed.
+- The agent is gone because Herdr or the Mac restarted (`reason: stopped_by_restart`) → its last screen
+  is saved to state/agents/<name>.md and an operation `interrupted-<name>` asks the user: continue or
+  not (buttons on the panel). «Continue» is a new sub-agent whose brief points to the saved report.
 - Dev servers (the user's decision of 2026-11-15: «потрібно контролювати, щоб агенти вчасно гасили
   після себе»): every listening port 4300–4399 is matched to its agent by state/ports.json (the
   coordinator writes the port block into each brief and into this file). Its agent idle for
@@ -39,7 +48,7 @@ AGENTS_DIR = os.path.join(ROOT, "state", "agents")
 LABEL = "genius-ai.agents-watch"
 EVERY = 30
 SEND_AFTER = 60
-WAIT_AFTER = 120
+WAIT_AFTER = 60
 HUNG_AFTER = 15 * 60
 SERVER_IDLE = 5 * 60        # an agent idle this long with its dev server still up → told to stop it
 PORTS = os.path.join(ROOT, "state", "ports.json")   # {"4310": "<tag>-<task>", "4300": "coordinator", ...}
@@ -49,10 +58,14 @@ RESUME = ("The previous answer broke off (API error, e.g. the Mac slept). Contin
 WORDS = {
     "uk": {"waits": "агент {n} чекає на вашу відповідь або закінчив", "hung": "агент {n} не рухається {m} хвилин",
            "dialog": "агент {n} чекає на дозвіл", "sent": "надіслала агенту {n} вашу відповідь",
-           "draft": "в агента {n} у полі вводу є текст, я його не надсилала"},
+           "draft": "в агента {n} у полі вводу є текст, я його не надсилала",
+           "cut": "перерваний перезапуском", "cut_ask": "Агент {n} перерваний перезапуском. Продовжити його роботу?",
+           "cut_yes": "continue", "cut_no": "drop"},
     "en": {"waits": "agent {n} waits for your answer or has finished", "hung": "agent {n} has not moved for {m} minutes",
            "dialog": "agent {n} waits for a permission", "sent": "sent your answer to agent {n}",
-           "draft": "agent {n} has text in its input; not sent"},
+           "draft": "agent {n} has text in its input; not sent",
+           "cut": "interrupted by a restart", "cut_ask": "Agent {n} was interrupted by a restart. Continue its work?",
+           "cut_yes": "continue", "cut_no": "drop"},
 }
 
 
@@ -137,6 +150,144 @@ def set_op(name, project, what, needs_user):
     write(OPS, ops)
 
 
+def interrupted(name, info, cfg, W):
+    """A sub-agent that a restart stopped: keep its last screen, and ask the user on the panel."""
+    project, tag, spoken = project_of(os.path.realpath(info.get("cwd") or ""), cfg)
+    report = os.path.join(AGENTS_DIR, f"{name}.md")
+    screen = sh(["hc", "read", name])
+    os.makedirs(AGENTS_DIR, exist_ok=True)
+    stamp = datetime.now().isoformat(timespec="minutes")
+    with open(report, "a") as f:
+        f.write(f"\n## {name} — {W['cut']}, {stamp}\n\n{last_message(screen) or screen[-4000:]}\n")
+    ops = [o for o in read(OPS, []) if o.get("id") != f"interrupted-{name}"]
+    title = info.get("title") or ""
+    ops.append({"id": f"interrupted-{name}", "project": project or "genius-ai", "kind": "interrupted", "agent": name,
+                "what": f"{name}: {W['cut']}" + (f" — {title}" if title else ""),
+                "waiting_for": f"state/agents/{name}.md", "needs": "user",
+                "ask": W["cut_ask"].format(n=name), "answers": [W["cut_yes"], W["cut_no"]],
+                "check": f"tail -30 state/agents/{name}.md",
+                "next": f"«{W['cut_yes']}»: a new sub-agent in {info.get('cwd', '?')} whose brief points to "
+                        f"state/agents/{name}.md; «{W['cut_no']}»: close this operation",
+                "resume": {"cwd": info.get("cwd"), "title": title, "report": f"state/agents/{name}.md"},
+                "started": datetime.now().astimezone().isoformat(timespec="minutes"), "by": "agents-watch"})
+    write(OPS, ops)
+    alert({"name": name, "parent": info.get("parent")}, W["cut"], spoken, cfg)
+    print(f"{stamp} interrupted {name}: report saved, the user is asked")
+
+
+def queued(name):
+    """The agent holds a place in the heavy queue (bin/heavy): it waits for its turn, it does not hang."""
+    try:
+        q = json.loads(sh([os.path.join(ROOT, "bin", "heavy"), "--json"]) or "{}")
+    except ValueError:
+        return False
+    # only WAITING counts: a holder whose screen stands still holds the whole queue — that one is worth an alert
+    return any(w.get("who") == name for w in (q.get("waiting") or []))
+
+
+ACTION = re.compile(r"⏺\s*(Write|Edit|Update|MultiEdit|NotebookEdit|Bash|Read|WebFetch)\((.*)\)\s*$")
+
+
+def answer_dialog(name, term, screen, project):
+    """A task agent's permission dialog: the gate decides. True when the watcher answered it."""
+    labels = term.get("labels") or {}
+    if not labels:
+        try:
+            labels = json.loads(sh(["hc", "get", name, "--json"]) or "{}").get("labels") or {}
+        except ValueError:
+            labels = {}
+    if not labels.get("genius.role"):
+        return False
+    lines = screen.rstrip("\n").split("\n")
+    tail = lines[-30:]
+    if re.search(r"[Tt]rust this folder|Folder access", screen[-3000:]):
+        # The user's decision of 2026-11-17 («для цього є вартовий, який має мене розвантажувати»): a task agent
+        # started by bin/genius agent in a folder of a configured project may trust that folder; anywhere else
+        # the dialog stays the user's.
+        cwd = os.path.realpath(term.get("cwd") or "")
+        first = next((l for l in tail if re.match(r"\s*[›❯]?\s*1\.\s+(Trust and continue|Yes, I trust)", l)), None)
+        if not project or not first:
+            return False
+        with open(os.path.join(ROOT, "state", "gate.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now().astimezone().isoformat(timespec="seconds"), "session": name, "cwd": cwd,
+                                "tool": "trust", "input": cwd, "decision": "allow", "via": "watcher/rule",
+                                "why": f"a task agent's trust dialog in the folder of the project {project}"}, ensure_ascii=False) + "\n")
+        sh(["hc", "keys", name, "enter"])
+        print(f"{datetime.now().isoformat(timespec='seconds')} trusted {cwd} for {name} ({project})")
+        return True
+    # Codex CLI: «Would you like to run the following command?», the command on «$ …» lines, «› 1. Yes, proceed (y)».
+    # The gate decides like for Claude Code; «y» approves once (lesson of 2026-11-17: the owner answered a gate dialog).
+    # a long command (a heredoc) pushes the question far above the last 30 lines: look further back
+    wide = lines[-250:]
+    if any("Would you like to run the following command?" in l for l in wide) and any(re.match(r"\s*[›❯]?\s*1\.\s+Yes", l) for l in tail):
+        i = max(k for k, l in enumerate(wide) if "Would you like to run the following command?" in l)
+        cmd, started = [], False
+        for l in wide[i + 1:]:
+            s = l.strip()
+            if s.startswith("$ "):
+                started = True
+                cmd.append(s[2:])
+            elif started and not re.match(r"[›❯]?\s*\d+\.\s", s) and not s.startswith("Press enter"):
+                cmd.append(l.rstrip()[2:] if l.startswith("  ") else l.rstrip())
+            elif started:
+                break
+        if not cmd or not any(re.match(r"\s*[›❯]?\s*1\.\s+Yes", l) for l in tail):
+            return False
+        cwd = os.path.realpath(term.get("cwd") or "")
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+        import gate
+        # Codex wraps a long one-line command over several screen lines; only a heredoc keeps real newlines
+        command = ("\n".join(cmd) if any("<<" in c for c in cmd) else " ".join(c.strip() for c in cmd)).strip()
+        decision, why, via = gate.decide("Bash", {"command": command, "from_screen": True}, cwd, {})
+        with open(os.path.join(ROOT, "state", "gate.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": datetime.now().astimezone().isoformat(timespec="seconds"), "session": name, "cwd": cwd,
+                                "tool": "Bash", "input": command[:300], "decision": decision,
+                                "via": f"watcher/{via}", "why": why + " (a Codex approval dialog)"}, ensure_ascii=False) + "\n")
+        if decision != "allow":
+            return False
+        sh(["hc", "keys", name, "y"])
+        print(f"{datetime.now().isoformat(timespec='seconds')} answered {name} (codex): {command[:80]} — {why[:80]}")
+        return True
+    yes = next((l for l in tail if re.match(r"\s*❯?\s*1\.\s+Yes\b", l)), None)
+    if not yes:
+        return False                                # not a yes/no dialog we know
+    action = None
+    for l in reversed(lines[-80:]):
+        m = ACTION.match(l.strip())
+        if m:
+            action = m
+            break
+    if action:
+        tool, arg = action.group(1), action.group(2).strip()
+    else:
+        # the newer dialog: «Run shell command», the command in a box of «│ » lines above «Do you want to proceed?»
+        box = [l.strip()[1:].strip() for l in tail if l.strip().startswith("│")]
+        if not any("Run shell command" in l for l in tail) or not box:
+            return False
+        tool, arg = "Bash", " ".join(box)
+    tool = {"Update": "Edit"}.get(tool, tool)
+    cwd = os.path.realpath(term.get("cwd") or "")
+    if tool == "Bash":
+        ti = {"command": arg}
+    elif tool == "WebFetch":
+        ti = {"url": arg}
+    else:
+        ti = {"file_path": arg if os.path.isabs(os.path.expanduser(arg)) else os.path.join(cwd, arg)}
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    import gate
+    decision, why, via = gate.decide(tool, ti, cwd, {})
+    with open(os.path.join(ROOT, "state", "gate.jsonl"), "a", encoding="utf-8") as f:
+        f.write(json.dumps({"at": datetime.now().astimezone().isoformat(timespec="seconds"), "session": name, "cwd": cwd,
+                            "tool": tool, "input": json.dumps(ti, ensure_ascii=False)[:300], "decision": decision,
+                            "via": f"watcher/{via}", "why": why + " (a Claude Code permission dialog)"}, ensure_ascii=False) + "\n")
+    if decision != "allow":
+        return False
+    # the cursor is on «1. Yes» (❯): Enter picks it; else the digit moves to it and picks it
+    sh(["hc", "keys", name, "enter" if "❯" in yes else "1"])
+    print(f"{datetime.now().isoformat(timespec='seconds')} answered {name}: {tool} {arg[:80]} — {why[:80]}")
+    return True
+
+
 def alert(term, text, spoken, cfg):
     """One alert: the voice (it stays silent when sound is off), and one line to the parent session."""
     voice = os.path.join(ROOT, "voice", "bin", "speak")
@@ -156,7 +307,23 @@ def watch():
     seen = set()
     for t in data.get("terminals", []):
         name = t.get("name")
-        if not name or not t.get("parent") or t.get("agent") != "claude-code" or t.get("state") != "live":
+        if not name or not t.get("parent") or t.get("state") != "live":
+            continue
+        if t.get("agent") not in ("claude-code", "codex"):
+            # Herdr names the agent only once it runs: at its first-start trust screen a task agent is still
+            # «zsh». Such a terminal is watched only for that trust dialog (lesson of 2026-11-17, ch-bodycode-banner).
+            if t.get("status") is not None:
+                continue
+            try:
+                t["labels"] = json.loads(sh(["hc", "get", name, "--json"]) or "{}").get("labels") or {}
+            except ValueError:
+                continue
+            if not t["labels"].get("genius.role"):
+                continue
+            screen = sh(["hc", "read", name])
+            if screen and re.search(r"[Tt]rust this folder|Folder access", screen[-3000:]):
+                project = project_of(os.path.realpath(t.get("cwd", "")), cfg)[0]
+                answer_dialog(name, t, screen, project)
             continue
         seen.add(name)
         s = st.setdefault(name, {})
@@ -178,7 +345,8 @@ def watch():
             s.pop("idle", None); s.pop("draft", None)
             if s.pop("alerted", None):
                 set_op(name, project, None, False)
-            if now - s.get("changed", now) > HUNG_AFTER and not s.get("hung"):
+            # waiting in the heavy queue (the owner's meeting, local model work, another run) is not «hung»
+            if now - s.get("changed", now) > HUNG_AFTER and not s.get("hung") and not queued(name):
                 s["hung"] = True
                 alert(t, W["hung"].format(n=name, m=HUNG_AFTER // 60), spoken, cfg)
             elif now - s.get("changed", now) <= HUNG_AFTER:
@@ -192,7 +360,13 @@ def watch():
             print(f"{datetime.now().isoformat(timespec='seconds')} resumed {name} after an API error")
             continue
 
-        if draft is None and re.search(r"Do you want|trust this folder|❯\s*\d+\.\s", tail):
+        # a Codex dialog with a long command repeats it in option 2: «› 1. Yes» can sit 15+ lines above the bottom
+        # (lesson of 2026-11-17, ch-bodycode-banner): look at the last 40 lines for the dialog, not 10
+        dtail = "\n".join(screen.rstrip().split("\n")[-40:])
+        if (draft is None or t.get("agent") == "codex") and re.search(r"Do you want|Would you like to run|trust this folder|[❯›]\s*\d+\.\s", dtail):
+            if s.get("answered") != digest and answer_dialog(name, t, screen, project):
+                s["answered"] = digest
+                continue
             if s.get("alerted") != f"dialog-{t.get('turn')}":
                 s["alerted"] = f"dialog-{t.get('turn')}"
                 set_op(name, project, f"{tag} {name}: {W['dialog'].format(n=name)}".strip(), True)
@@ -203,7 +377,8 @@ def watch():
         # tell it from the user's text. Only an agent started without suggestions
         # (CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false, label genius.nosuggest=1) gets its input sent;
         # for any other agent the text only raises an alert.
-        if draft and (t.get("labels") or {}).get("genius.nosuggest") != "1":
+        if draft and ((t.get("labels") or json.loads(sh(["hc", "get", name, "--json"]) or "{}").get("labels") or {})
+                      .get("genius.nosuggest")) != "1":
             if s.get("alerted") != f"draft-{t.get('turn')}":
                 s["alerted"] = f"draft-{t.get('turn')}"
                 alert(t, W["draft"].format(n=name), spoken, cfg)
@@ -225,12 +400,24 @@ def watch():
         if now - s["idle"] >= WAIT_AFTER and s.get("alerted") != f"turn-{t.get('turn')}":
             s["alerted"] = f"turn-{t.get('turn')}"
             os.makedirs(AGENTS_DIR, exist_ok=True)
-            with open(os.path.join(AGENTS_DIR, f"{name}.md"), "w") as f:
+            # the agent may write its own report to state/agents/<name>.md: the watcher keeps the screen apart
+            with open(os.path.join(AGENTS_DIR, f"{name}.screen.md"), "w") as f:
                 f.write(f"# {name} — {datetime.now().isoformat(timespec='minutes')}\n\n{last_message(screen)}\n")
             set_op(name, project, f"{tag} {name}: {W['waits'].format(n=name)}".strip(), True)
-            # An agent that finished its turn is not news for the chat (the user's decision of
-            # 2026-11-15: «тут і чату просто сиплеться спам»): only the report file and the panel.
-            # The chat gets a line only when an agent asks (a dialog) or hangs.
+            # A task agent (started by `bin/genius agent`: label genius.role) that ends its turn has a
+            # report: the coordinator is told at once, once per turn, so the user never has to ask
+            # (the user's decision of 2026-11-17: «чому мені приходиться перепитувати?»). Other agents
+            # finishing a turn stay quiet (the user's decision of 2026-11-15: no spam in the chat).
+            labels = t.get("labels") or {}
+            if not labels:
+                try:
+                    labels = json.loads(sh(["hc", "get", name, "--json"]) or "{}").get("labels") or {}
+                except ValueError:
+                    labels = {}
+            if labels.get("genius.role") and t.get("parent"):
+                sh(["hc", "send", t["parent"], f"[agents-watch] {name} finished its turn: the report is in "
+                    f"state/agents/{name}.md (its screen: state/agents/{name}.screen.md, hc read {name}). Read it, check it, tell the user, then stop the agent."],
+                   timeout=60)
 
     parent = next((t.get("parent") for t in data.get("terminals", []) if t.get("parent")), None)
     servers(st, seen, parent)
@@ -240,6 +427,12 @@ def watch():
         if name not in seen:
             if st[name].get("alerted"):
                 set_op(name, None, None, False)
+            try:                                    # stopped by a restart, not by us: do not lose its work
+                info = json.loads(sh(["hc", "get", name, "--json"]) or "{}")
+            except ValueError:
+                info = {}
+            if info.get("reason") == "stopped_by_restart":
+                interrupted(name, info, cfg, W)
             del st[name]
     write(STATE, st)
 
@@ -259,6 +452,12 @@ def servers(st, live, parent):
     owners = read(PORTS, {})
     now = time.time()
     told = st.setdefault("_servers", {})
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+        import load
+        quiet, until = load.quiet_now()
+    except Exception:
+        quiet, until = "", ""
     for port, pids in sorted(listening_ports().items()):
         owner = owners.get(port)
         if owner == "coordinator":
@@ -272,6 +471,11 @@ def servers(st, live, parent):
             for pid in pids:
                 sh(["kill", str(pid)])
             print(f"{datetime.now().isoformat(timespec='seconds')} stopped port {port} of gone agent {owner}")
+            continue
+        if quiet and told.get(f"quiet-{owner}") != until:
+            told[f"quiet-{owner}"] = until
+            sh(["hc", "send", owner, f"[agents-watch] Тихе вікно «{quiet}» до {until}: у власника зустріч, ноут має бути легким. "
+                "Зупини свої dev-сервери, браузери й контейнери зараз; важкі команди почекають у черзі до кінця вікна."], timeout=60)
             continue
         a = st.get(owner, {})
         idle = a.get("idle")
@@ -292,6 +496,16 @@ def loop_job(action, label, args, every, log):
     import shutil
     import signal
     name = label.replace("genius-ai.", "genius-")
+    # «stopped by the user»: the mark keeps bin/lib/workers.py from starting it again until a start clears it
+    mark = os.path.join(ROOT, "state", f"{label}.off")
+    if action == "start":
+        try:
+            os.unlink(mark)
+        except OSError:
+            pass
+    elif action == "stop":
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        open(mark, "w").close()
     me = os.path.join(ROOT, "bin", "genius")
     cmd = " ".join(f'"{a}"' for a in [me] + args)
     loop = f'while true; do {cmd} >> "{log}" 2>&1; sleep {every}; done'

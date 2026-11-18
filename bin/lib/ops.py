@@ -4,6 +4,10 @@
                                          output of its read-only `check`; marks the ones to look at
     bin/genius ops close <id> <why>      move one operation to state/operations.closed.json, with the why
     bin/genius ops touch <id>            record that an operation was looked at today (its `updated`)
+    bin/genius ops answer <id> <text>    the user's answer from a button of the Herdr panel: stored in the
+                                         operation (`answered`), which then no longer waits for the user;
+                                         the panel sends the same text to the genius-ai chat
+    bin/genius ops later <id>            the user's «later» from the panel: the operation is paused
     bin/genius ops sweep                 the automatic cleanup (every 15 min, `ops sweep start`): closes an
                                          operation whose `done_when` command succeeds, or whose pull request
                                          (named in `check`) is merged or closed; marks `stale` what waits for
@@ -106,6 +110,31 @@ def touch(op_id):
     sys.exit(f"no operation «{op_id}»")
 
 
+def answer(op_id, text):
+    ops = read(OPS, [])
+    for o in ops:
+        if o["id"] == op_id:
+            o["answered"] = {"text": text, "at": datetime.now().astimezone().isoformat(timespec="minutes")}
+            o.pop("needs", None)
+            o.pop("stale", None)
+            o["updated"] = date.today().isoformat()
+            write(OPS, ops)
+            print(f"answered: {op_id} — {text}")
+            return
+    sys.exit(f"no operation «{op_id}»")
+
+
+def later(op_id):
+    ops = read(OPS, [])
+    for o in ops:
+        if o["id"] == op_id:
+            o["paused"] = {"since": date.today().isoformat(), "by": "owner", "why": "later (panel)"}
+            write(OPS, ops)
+            print(f"later: {op_id}")
+            return
+    sys.exit(f"no operation «{op_id}»")
+
+
 SWEEP_LABEL = "genius-ai.ops-sweep"
 SWEEP_EVERY = 900
 PR_IN_CHECK = re.compile(r"gh (?:-R \S+ )?pr (?:view|checks) (\d+)(?:.*?-R ([\w.-]+/[\w.-]+))?")
@@ -119,6 +148,20 @@ def sh(cmd, timeout=45):
         return 124, ""
 
 
+def gh_account_env(repo):
+    """`GH_TOKEN="…" ` for the account the config names for this repo (services → github → account), else ''.
+
+    A machine can hold several gh logins and a private repo answers 404 to the wrong one. The active login
+    is never switched: the token goes to this one call.
+    """
+    for s in read(os.path.join(ROOT, "genius.config.json"), {}).get("services") or []:
+        if s.get("type") == "github" and s.get("account") and repo in (s.get("repos") or []):
+            code, token = sh(f'gh auth token --user "{s["account"]}"')
+            if code == 0 and token:
+                return f'GH_TOKEN="{token}" '
+    return ""
+
+
 def pr_state(op):
     """The state of the pull request the operation's check names: MERGED, CLOSED, OPEN or None."""
     m = PR_IN_CHECK.search(op.get("check", "") or "")
@@ -130,8 +173,7 @@ def pr_state(op):
         repo = r.group(1) if r else None
     if not repo:
         return None, None
-    account = "Yurii-777" if repo.startswith("solidlogictech/") else "Yurii77777"
-    code, out = sh(f'GH_TOKEN=$(gh auth token --user {account}) gh pr view {num} -R {repo} --json state -q .state')
+    code, out = sh(f'{gh_account_env(repo)}gh pr view {num} -R {repo} --json state -q .state')
     return (out or None) if code == 0 else None, f"{repo}#{num}"
 
 
@@ -162,7 +204,13 @@ def sweep():
                     f["stale"] = date.today().isoformat()
             write(OPS, fresh)
             marked.append(o["id"])
+    try:   # tickets that became ready since the last pass get a critique (bin/lib/ticket.py); never breaks the sweep
+        import ticket
+        critiqued = ticket.sweep()
+    except Exception as e:
+        critiqued = [f"error {type(e).__name__}"]
     stamp = datetime.now().isoformat(timespec="seconds")
+    print(f"{stamp} sweep: critiques started {critiqued or 'none'}")
     print(f"{stamp} sweep: closed {closed or 'none'}; stale {marked or 'none'}")
 
 
@@ -178,6 +226,16 @@ def loop_job(action, label, args, every, log):
     import shutil
     import signal
     name = label.replace("genius-ai.", "genius-")
+    # «stopped by the user»: the mark keeps bin/lib/workers.py from starting it again until a start clears it
+    mark = os.path.join(ROOT, "state", f"{label}.off")
+    if action == "start":
+        try:
+            os.unlink(mark)
+        except OSError:
+            pass
+    elif action == "stop":
+        os.makedirs(os.path.dirname(mark), exist_ok=True)
+        open(mark, "w").close()
     me = os.path.join(ROOT, "bin", "genius")
     cmd = " ".join(f'"{a}"' for a in [me] + args)
     loop = f'while true; do {cmd} >> "{log}" 2>&1; sleep {every}; done'
@@ -227,9 +285,13 @@ if __name__ == "__main__":
         close(args[1], " ".join(args[2:]))
     elif args[0] == "touch" and len(args) == 2:
         touch(args[1])
+    elif args[0] == "answer" and len(args) >= 3:
+        answer(args[1], " ".join(args[2:]))
+    elif args[0] == "later" and len(args) == 2:
+        later(args[1])
     elif args[0] == "sweep" and len(args) == 1:
         sweep()
     elif args[0] == "sweep" and args[1] in ("start", "stop", "status"):
         sweep_job(args[1])
     else:
-        sys.exit("usage: bin/genius ops review [--days N] | close <id> <why> | touch <id> | sweep [start|stop|status]")
+        sys.exit("usage: bin/genius ops review [--days N] | close <id> <why> | touch <id> | answer <id> <text> | later <id> | sweep [start|stop|status]")
