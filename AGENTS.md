@@ -373,7 +373,12 @@ The user's decision of 2026-11-17: the user does not hold the plan of the day in
 - Keep it true in the same reply that changes it: `focus now <n>` for the step in work, `focus done <n>` when it is finished, `focus step "<text>"` for a new one.
 - Write only what the user said or approved. Never invent steps.
 - The panel shows it on top of Attention, only on its own date. At the end of the day leave it; tomorrow's focus replaces it.
-- The «Done today» list fills itself with the project's merged PRs (`gh`, cached 5 min). Add other finished work by hand: `bin/genius done "<text>" [--project <name>]` (`state/done-<date>.jsonl`). Do it in the reply that finishes the work (an approved page, an activated version, a data package).
+- The «Done today» list fills itself with the project's merged PRs (`gh`, cached 5 min).
+- The Stop hook writes the other done items itself (`bin/lib/done_auto.py`). The user's decision of 2026-11-18: «не оновлюється статус виконаних задач знову» — the list is a mechanism, not a step that a reply can forget.
+- The hook reads the coordinator's final reply of the turn. A line with ✅ is finished work. So is a line with «злито», «опубліковано», «задеплоєно», «створено тікет» or «закрито» («merged», «published», «deployed», «created», «closed»).
+- Each item becomes one record in `state/done-<date>.jsonl` with source «auto». The project comes from the tag at the start of the line or of its block. The hook reads the tags from `projects/<name>/project.json`.
+- A line with no tag belongs to genius-ai. The hook leaves out questions, proposals, «не ще» lines and the 🔊 line. It leaves out a duplicate of the day, by text and by PR or ticket key. Self-check: `python3 -I bin/lib/done_auto.py selftest`.
+- `bin/genius done "<text>" [--project <name>]` stays. Use it for a correction, and for work that the reply does not name (an approved page, an activated version, a data package).
 - Work that is not in the focus and not urgent goes to the board (`"queue": "next"`), not into the user's attention.
 
 ## Log of the day and knowledge
