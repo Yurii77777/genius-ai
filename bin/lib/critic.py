@@ -18,10 +18,13 @@ nouns: path, line, one line of text). It answers in at most 10 lines in three pa
     2) HUMAN OUTPUT  — what the result must look like for the person who reads or uses it
     3) OWNER RULES   — the user's earlier words that apply and the brief does not mention
 
-The answer is appended to the brief under «Critic notes (read first)». No answer within 40 s → the agent starts
+The answer is appended to the brief under «Critic notes (read first)». No answer within 180 s → the agent starts
 without notes, and the log says so. Every critique is one line in `state/brief-critic.jsonl`: the project, the
-folder, who wrote the brief, which provider judged, the time it took, and why there are no notes. Self-check:
-`python3 -I bin/lib/critic.py selftest`.
+folder, who wrote the brief, which provider judged, the time it took, and why there are no notes.
+
+Before the notes stands the context of every brief (bin/lib/briefctx.py): the owner's rules from the knowledge
+base and the project's skills. A brief started through `bin/genius agent` gets it from bin/lib/agent.py; an
+internal subagent of this session gets it from this hook. Self-check: `python3 -I bin/lib/critic.py selftest`.
 """
 import json
 import os
@@ -34,7 +37,7 @@ import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 LOG = os.path.join(ROOT, "state", "brief-critic.jsonl")
-BUDGET = 40.0                 # seconds for the whole critique: evidence, the critic's answer, everything
+BUDGET = 180.0                # seconds: a judge from another provider must read the brief and the code (owner 20.11: «він не у контексті, йому потрібно вичитати і зрозуміти суть»)
 MAX_LINES = 12                # the critic answers in 10 lines; a longer answer is cut here
 MAX_HITS = 12                 # repo-scan lines given to the critic
 MAX_RULES = 6                 # knowledge records given to the critic
@@ -347,17 +350,19 @@ def result(rec):
 
 
 def notes_for(brief, folder="", project="", author="", budget=BUDGET, links=None, available=None,
-              judge=None, rules_fn=None, scan_fn=None):
-    """{notes, provider, ms, why}: the critic's notes for one brief. Never raises, never blocks."""
+              judge=None, rules_fn=None, scan_fn=None, ev=None):
+    """{notes, provider, ms, why}: the critic's notes for one brief. Never raises, never blocks.
+    ``ev``: evidence already gathered (`evidence`), so the caller's context and the critic share one search."""
     t0 = time.time()
     author = author or author_of()
     rec = {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "project": project, "folder": folder,
            "author": author, "provider": "", "ms": 0, "lines": 0, "why": "", "notes": ""}
-    try:
-        ev = evidence(brief, folder, project, rules_fn=rules_fn, scan_fn=scan_fn)
-    except Exception as e:                                  # the evidence is best effort: the brief still starts
-        ev = {"rules": [], "code": []}
-        rec["why"] = f"evidence: {type(e).__name__}"
+    if ev is None:
+        try:
+            ev = evidence(brief, folder, project, rules_fn=rules_fn, scan_fn=scan_fn)
+        except Exception as e:                              # the evidence is best effort: the brief still starts
+            ev = {"rules": [], "code": []}
+            rec["why"] = f"evidence: {type(e).__name__}"
     link, skipped = pick(author, links, available)
     if not link:
         rec["why"] = "no critic of another provider can answer: " + "; ".join(skipped)
@@ -391,8 +396,18 @@ def block(notes):
     return "Critic notes (read first)\n" + notes.strip() + "\n"
 
 
+def hook_output(brief, folder, project, notes, rules_fn=None):
+    """«additionalContext» of the Agent (Task) tool: the context of every brief (bin/lib/briefctx.py) — the owner's
+    rules and the project's skills — then the critic's notes. '' when neither has anything to say."""
+    import briefctx
+    ctx = briefctx.context(brief, folder, project, rules_fn=rules_fn)
+    parts = [p for p in (ctx["text"], block(notes)) if (p or "").strip()]
+    return "\n\n".join(parts)
+
+
 def hook():
-    """The Agent (Task) tool: the same critic on tool_input.prompt, its notes added to the tool call."""
+    """The Agent (Task) tool: the context of the brief and the same critic on tool_input.prompt, both added to the
+    tool call — the skills and the owner's rules reach an agent this session starts, on any provider."""
     try:
         data = json.loads(sys.stdin.read() or "{}")
     except ValueError:
@@ -406,9 +421,10 @@ def hook():
     folder = os.path.realpath(data.get("cwd") or os.getcwd())
     project = agent().project_of(folder).get("name", "")
     res = notes_for(brief, folder, project, author=author_of())
-    if res["notes"]:
+    text = hook_output(brief, folder, project, res["notes"])
+    if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                                 "additionalContext": block(res["notes"])}}))
+                                                 "additionalContext": text}}))
     return 0
 
 
@@ -554,6 +570,25 @@ def selftest():
         import inspect
         check("the hook keeps no switch for a short brief", "len(" not in inspect.getsource(hook),
               inspect.getsource(hook)[:120])
+
+        # 6) the Agent-tool hook carries the context of the brief before the notes (the owner's goal of 2026-11-20)
+        skill = os.path.join(repo, ".claude", "skills", "renew-page", "SKILL.md")
+        os.makedirs(os.path.dirname(skill), exist_ok=True)
+        with open(skill, "w", encoding="utf-8") as f:
+            f.write("---\nname: renew-page\ndescription: Сторінка продовження: активні абонементи, ліміт 8. "
+                    "Тригери: «продовження», «абонементи».\n---\n")
+        out = hook_output(FIXTURE_BRIEFS["renew"], repo, "demo", "1) ALREADY EXISTS — none found",
+                          rules_fn=lambda b, p, n: [("власник · rule", "Renew page: ≤8 actives")])
+        check("the Agent hook carries the owner's rules", "≤8 actives" in out, out[:200])
+        check("the Agent hook carries the project's skills", "renew-page/SKILL.md" in out, out[:300])
+        check("the Agent hook says to read the skills before the start", "read these before you start" in out)
+        check("the context stands before «Critic notes»",
+              out.find("Owner's rules") < out.find("Critic notes (read first)")
+              < out.find("1) ALREADY EXISTS"), out[:300])
+        check("one line per skill in the Agent hook",
+              all(" — " in l for l in out.splitlines() if "/SKILL.md" in l))
+        check("the Agent hook says nothing when neither has anything",
+              hook_output(FIXTURE_BRIEFS["renew"], "", "demo", "", rules_fn=lambda b, p, n: []) == "")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\ncritic selftest: {len(fails)} failed of {checks}" if fails else f"\ncritic selftest: ok ({checks})")

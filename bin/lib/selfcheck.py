@@ -15,6 +15,10 @@ It checks:
    `claude`/`codex` with a brief is a bypass. Herdr workers (`bin/genius ops sweep`, the watcher) run a shell
    loop, not a brief: their `hc run` is not counted.
 5. `bin/genius` routes `selfcheck`, so the test is one word away.
+6. Every brief also carries the context of `bin/lib/briefctx.py` — the owner's rules from the knowledge base and the
+   project's skills — before «Critic notes», on both paths: `bin/genius agent` and the Agent-tool hook. A Codex or
+   Ollama agent has no Claude Code hooks, so a brief that skips it leaves that model without the owner's words.
+   `python3 -I bin/lib/briefctx.py selftest` checks the block itself.
 
 A new start path fails this test until it passes the critic. Read the failure and wire it; do not edit the test
 to pass.
@@ -91,6 +95,17 @@ def main():
     check("the critic is appended to the brief with its heading",
           "critic.block(" in body and "brief = brief + " in body)
     check("the critic has no off switch", not re.search(r"no[-_]critic|skip[-_]critic|CRITIC_OFF", body))
+
+    # 1b) the context of every brief (bin/lib/briefctx.py): the owner's rules and the project's skills, before the
+    # critic's notes, on both paths — no brief leaves a Codex or Ollama model without them.
+    ctx_at, critic_at = main_src.find("briefctx.context("), main_src.find("critic.notes_for(")
+    check("bin/lib/agent.py gives every brief its context before the critic's notes",
+          0 < ctx_at < critic_at, f"context at {ctx_at}, the critic at {critic_at}")
+    csrc = text(os.path.join(LIB, "critic.py"))
+    hook_at = csrc[csrc.find("def hook_output("):csrc.find("def hook(")]
+    check("the Agent-tool hook carries the same context",
+          "briefctx.context(" in hook_at and "block(notes)" in hook_at)
+    check("the context has no off switch", not re.search(r"no[-_]context|skip[-_]context|CONTEXT_OFF", body))
 
     # 2) the critic is never the provider that wrote the brief
     sys.path.insert(0, LIB)

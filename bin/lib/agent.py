@@ -25,8 +25,10 @@ Providers:
 A provider whose limits are nearly spent (bin/genius models: 5 h or 7 d ≥ 95 %) gives way to its fallback.
 
 Every brief gets the standard ending (ask, do not invent; stop what you start; the heavy queue; the
-knowledge base) from the script, so no brief forgets it. The terminal gets the labels genius.role and
-genius.model: the panel shows the model beside the agent.
+knowledge base) from the script, so no brief forgets it. Before the critic's notes it also gets the context of
+every brief (bin/lib/briefctx.py): the owner's rules from the knowledge base and the project's skills. A Codex or
+Ollama agent has no Claude Code hooks, so that block is its only source. The terminal gets the labels
+genius.role and genius.model: the panel shows the model beside the agent.
 """
 import json
 import os
@@ -338,11 +340,28 @@ def main():
         sys.exit(f"no folder {folder}")
     project = project_of(folder)
     spec, notes = pick(role_name, project)
-    # The critic (the owner's rule of 2026-11-20): every brief is read by a model of ANOTHER provider before the
-    # agent starts, and its notes go into the brief. It never blocks the start: no answer within 40 s → no notes,
-    # and state/brief-critic.jsonl says why. There is no switch: a brief without the critic is not a brief.
+    # The context of every brief (the owner's goal of 2026-11-20): the owner's rules from the knowledge base and the
+    # project's skills, before «Critic notes». It comes from the script, so no provider and no brief misses it; the
+    # evidence is the critic's own, so one search of the knowledge base serves both.
+    import briefctx
     import critic
-    critique = critic.notes_for(brief, folder, project.get("name", ""), author=os.environ.get("GENIUS_AUTHOR") or "claude")
+    base = brief
+    try:
+        ev = critic.evidence(base, folder, project.get("name", ""))
+    except Exception:
+        ev = {"rules": [], "code": []}
+    ctx = briefctx.context(base, folder, project.get("name", ""), role_name,
+                           rules_fn=lambda b, p, n: ev["rules"][:n])
+    if ctx["text"]:
+        brief = base + "\n\n" + ctx["text"]
+        notes.append(f"context: {ctx['rules']} owner rules · {ctx['skills']} skills")
+    else:
+        notes.append("context: no rule and no skill bears on this brief")
+    # The critic (the owner's rule of 2026-11-20): every brief is read by a model of ANOTHER provider before the
+    # agent starts, and its notes go into the brief. It never blocks the start: no answer within 180 s → no notes,
+    # and state/brief-critic.jsonl says why. There is no switch: a brief without the critic is not a brief.
+    critique = critic.notes_for(base, folder, project.get("name", ""), ev=ev,
+                                author=os.environ.get("GENIUS_AUTHOR") or "claude")
     if critique["notes"]:
         brief = brief + "\n\n" + critic.block(critique["notes"])
         notes.append(f"critic: {critique['provider']} · {len(critique['notes'].splitlines())} lines · "
