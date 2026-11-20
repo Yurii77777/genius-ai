@@ -17,13 +17,14 @@ How it decides:
    secrets (~/.ssh, .env files, keychains), deleting outside the work folder, privilege, wiping volumes,
    disabling TLS. Allow: reading, searching, editing inside the work folder or the scratch space, local
    git that changes no remote, tests, builds, linters, the heavy queue, the knowledge base, web search.
-2. Anything else goes to the judge, and the judge is the local Ollama first: kimi-k3.1-pro:cloud, then
-   deepseek-v4.1-flash:cloud (GENIUS_GATE_CHAIN changes the links). Claude (`claude -p`, the user's own Claude
-   Code login, default model «sonnet», GENIUS_GATE_JUDGE to change) is the LAST link only: a judge call on Claude
-   eats the user's own 5-hour window (the owner's decision of 2026-11-20: 252 calls in 35 minutes, 13 % → 81 %).
-   The judge gets the action, the folder and the rules above, and answers ALLOW or DENY and one reason. The same
-   action in the same folder is judged once (state/gate-cache.json). No judge, or no clear answer → deny: a
-   stopped agent is cheaper than a wrong action.
+2. Anything else goes to the judge, which is the role «judge» of bin/lib/agent.py (bin/lib/judge.py):
+   kimi-k3.1-pro:cloud → glm-5.3:cloud → deepseek-v4.1-flash:cloud → codex → claude (sonnet), the first that
+   answers. The local Ollama answers in about a second and costs the user nothing. Claude is the LAST link only:
+   a judge call on Claude eats the user's own 5-hour window (the owner's decision of 2026-11-20: 252 calls in
+   35 minutes, 13 % → 81 %). A link of the agent's own family is skipped, and Claude is no link at all while the
+   config says "claude_fallback": false. The judge gets the action, the folder and the rules above, and answers
+   ALLOW or DENY and one reason. The same action in the same folder is judged once (state/gate-cache.json). No
+   judge, or no clear answer → deny: a stopped agent is cheaper than a wrong action.
 Every decision goes to state/gate.jsonl; the agent gets the reason with a deny, and can report it.
 
 The gate never decides what only the user decides (a merge, a write to prod, money, lifting a hold): those
@@ -37,37 +38,20 @@ import shlex
 import subprocess
 import sys
 import time
-import urllib.request
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 LOG = os.path.join(ROOT, "state", "gate.jsonl")
 CACHE = os.path.join(ROOT, "state", "gate-cache.json")
 HOME = os.path.expanduser("~")
-JUDGE_MODEL = os.environ.get("GENIUS_GATE_JUDGE", "sonnet")
-OLLAMA = os.environ.get("OLLAMA_HOST_URL", "http://127.0.0.1:11434")
-# The judge chain, in order. The local Ollama answers in about a second and costs the user nothing; Claude is the
-# last link, because every judge call on it spends the user's own 5-hour window (the owner's decision of 2026-11-20).
-JUDGE_CHAIN = [("ollama", "kimi-k3.1-pro:cloud"), ("ollama", "deepseek-v4.1-flash:cloud"), ("claude", JUDGE_MODEL)]
-OLLAMA_BUDGET = 20.0          # seconds for one Ollama link; a cloud model answers in about a second
-CLAUDE_BUDGET = 90.0          # seconds for the Claude link
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import judge as judge_role                                   # the role «judge»: the chain and the callers
 
 
 def judge_chain():
-    """The links of the judge in order, [(provider, model)]. GENIUS_GATE_CHAIN «ollama:<model>,claude:<model>»
-    replaces the whole chain; GENIUS_GATE_JUDGE changes the model of the Claude link."""
-    raw = (os.environ.get("GENIUS_GATE_CHAIN") or "").strip()
-    if not raw:
-        return list(JUDGE_CHAIN)
-    links = []
-    for item in raw.split(","):
-        prov, _, model = item.strip().partition(":")
-        prov, model = prov.strip().lower(), model.strip()
-        if prov == "claude":
-            links.append(("claude", model or JUDGE_MODEL))
-        elif prov == "ollama":
-            links.append(("ollama", model or JUDGE_CHAIN[0][1]))
-    return links
+    """The judge's links now, [(provider, model)]: the role «judge» without the family of the agent judged and
+    without the Claude link while the config says "claude_fallback": false."""
+    return [(l["provider"], l.get("model", "")) for l in judge_role.links(judge_role.self_link())]
 
 DENY_BASH = [
     (r"\brm\s+-[a-zA-Z]*[rR][a-zA-Z]*\s+(/|~|\$HOME|\.\.)", "deleting outside the work folder"),
@@ -774,45 +758,11 @@ def parse_verdict(out):
     return ("allow" if verdicts[-1] == "ALLOW" else "deny"), " ".join(out.split())[-200:]
 
 
-def ollama_judge(prompt, model):
-    """The judge's words from an Ollama model, or «» when it does not answer. A thinking model gets no budget to
-    think here: the answer is one word, and the thinking would eat the allowance and print nothing."""
-    for extra in ({"think": False}, {}):                # an older Ollama refuses «think»: the second try drops it
-        body = {"model": model, "stream": False, "messages": [{"role": "user", "content": prompt}],
-                "options": {"temperature": 0, "num_predict": 120}, **extra}
-        req = urllib.request.Request(OLLAMA.rstrip("/") + "/api/chat", data=json.dumps(body).encode(),
-                                     headers={"content-type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=OLLAMA_BUDGET) as r:
-                data = json.load(r)
-        except (OSError, ValueError):
-            return ""
-        if data.get("error"):
-            continue
-        text = ((data.get("message") or {}).get("content") or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def claude_judge(prompt, model):
-    """The judge's words from Claude Code on this computer, or «» when it cannot be asked."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_") and k not in ("CLAUDE_CODE_SUBAGENT_MODEL",)}
-    env["GENIUS_JUDGE"] = "1"                            # our own hooks stay out of the judge's session
-    try:
-        r = subprocess.run(["claude", "-p", "--model", model, "--max-turns", "1", "--tools", "", "--", prompt],
-                           capture_output=True, text=True, timeout=CLAUDE_BUDGET, env=env, cwd=ROOT)
-    except (OSError, subprocess.TimeoutExpired):
-        return ""
-    return (r.stdout or "").strip()
-
-
 def judge(tool, ti, cwd):
-    """(decision, why, provider) from the first link of the judge chain that answers, or None when none does.
+    """(decision, why, provider) from the first link of the judge role that answers, or None when none does.
     Claude is the last link, never the first: its calls spend the user's own 5-hour window."""
     precedent = ""
     try:                                                # the user's earlier decisions about the same kind of action
-        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
         import know
         found, vectors = know.search(f"{tool} {json.dumps(ti, ensure_ascii=False)[:400]}", "", 4)
         rows = [r for s, r, cos, exact in found if r["who"] == "user" and (cos >= 0.55 if vectors else exact)]
@@ -821,14 +771,12 @@ def judge(tool, ti, cwd):
                          + "\n".join(f"- [{r['source']}] {r['text'][:300]}" for r in rows[:3]) + "\n")
     except Exception:
         precedent = ""
-    prompt = judge_prompt(tool, ti, cwd, precedent)
-    for provider, model in judge_chain():
-        text = ollama_judge(prompt, model) if provider == "ollama" else claude_judge(prompt, model)
-        got = parse_verdict(text) if text else None
-        if not got:
-            continue                                     # this link is silent: the next one decides
-        return got[0], f"judge {model.split(':')[0]}: {got[1]}", provider
-    return None
+    text, link, _notes = judge_role.ask(judge_prompt(tool, ti, cwd, precedent), judged=judge_role.self_link())
+    got = parse_verdict(text) if text else None
+    if not got:
+        return None
+    name = (link.get("model") or link["provider"]).split(":")[0]
+    return got[0], f"judge {name}: {got[1]}", link["provider"]
 
 
 def read(path, default):
@@ -1085,25 +1033,31 @@ def selftest():
             d, why = rules("Bash", {"command": cmd}, app, {})
             check("to the judge: " + cmd[:60], d is None, f"{d}: {why}")
         # the chain: the local Ollama decides first, Claude only when every other link is silent
-        global ollama_judge, claude_judge
-        real_ollama, real_claude = ollama_judge, claude_judge
+        real_ollama, real_codex, real_claude = judge_role.ollama_text, judge_role.codex_text, judge_role.claude_text
+        real_self = judge_role.self_link
+        judge_role.self_link = lambda: {}                # no agent judged here: the whole chain is asked
         asked = []
         try:
-            ollama_judge = lambda p, m: asked.append(m) or "ALLOW a script we cannot read"
-            claude_judge = lambda p, m: asked.append("claude") or ""
+            judge_role.ollama_text = lambda model, prompt, *a, **k: asked.append(model) or "ALLOW a script we cannot read"
+            judge_role.codex_text = lambda prompt, *a, **k: asked.append("codex") or ""
+            judge_role.claude_text = lambda prompt, *a, **k: asked.append("claude") or ""
             got = judge("Bash", {"command": "zsh /tmp/unknown.sh"}, "/tmp")
             check("the judge asks the local Ollama first, never Claude", bool(got) and got[2] == "ollama"
                   and "claude" not in asked, f"{got} asked {asked}")
-            ollama_judge = lambda p, m: asked.append(m) or ""
-            claude_judge = lambda p, m: "DENY the judge of last resort"
+            judge_role.ollama_text = lambda model, prompt, *a, **k: asked.append(model) or ""
+            judge_role.codex_text = lambda prompt, *a, **k: "DENY the judge of last resort"
             got = judge("Bash", {"command": "zsh /tmp/unknown.sh"}, "/tmp")
-            check("Claude answers only when every Ollama link is silent", bool(got) and got[2] == "claude", str(got))
+            check("Codex answers when every Ollama link is silent", bool(got) and got[2] == "codex", str(got))
+            judge_role.codex_text = lambda prompt, *a, **k: ""
+            judge_role.claude_text = lambda prompt, *a, **k: "DENY the judge of last resort"
+            got = judge("Bash", {"command": "zsh /tmp/unknown.sh"}, "/tmp")
+            check("Claude answers only when every other link is silent", bool(got) and got[2] == "claude", str(got))
             if "ollama" in sys.argv:
-                text = real_ollama(judge_prompt("Bash", {"command": "zsh /tmp/unknown.sh"}, "/tmp"),
-                                   judge_chain()[0][1])
+                text = real_ollama(judge_chain()[0][1], judge_prompt("Bash", {"command": "zsh /tmp/unknown.sh"}, "/tmp"))
                 check("the live Ollama link answers ALLOW or DENY", bool(parse_verdict(text or "")), (text or "")[:80])
         finally:
-            ollama_judge, claude_judge = real_ollama, real_claude
+            judge_role.ollama_text, judge_role.codex_text, judge_role.claude_text = real_ollama, real_codex, real_claude
+            judge_role.self_link = real_self
     finally:
         local_containers, remote_db_host = real, real_far
     print(f"\ngate selftest: {len(fails)} failed" if fails else "\ngate selftest: ok")

@@ -9,9 +9,10 @@ agent whose last message ends with a question — and answers it here:
    legal, new product text (NEVER below; `selftest` checks the list). Never answered by the watcher.
 2. The question is searched in the knowledge base (bin/lib/know.py; the same project's records first) for
    the user's own words. Nothing found → the user, as before.
-3. A judge (claude -p, the same way bin/lib/gate.py asks its judge) gets the question, the options and the
-   found records, and returns {"covered", "option", "answer", "source"}. It may say «covered» only when a
-   record clearly decides this exact question.
+3. A judge gets the question, the options and the found records, and returns {"covered", "option", "answer",
+   "source"}. It may say «covered» only when a record clearly decides this exact question. The judge is the role
+   «judge» of bin/lib/judge.py, the same one the gate asks: the local Ollama first, Claude last. A link of the
+   agent's own family is skipped, and the judge is off while state/gate-judge.off exists.
 4. Covered → the watcher answers: the option is picked in the dialog (the cursor is read, not assumed), or
    the answer is typed into an agent started without prompt suggestions (label genius.nosuggest=1).
    Not covered, the judge silent, any error → the user, exactly as before.
@@ -33,13 +34,15 @@ import sys
 import time
 from datetime import datetime
 
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import judge as judge_role                           # the role «judge»: the chain and the callers
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 STATE = os.environ.get("GENIUS_ASK_STATE") or os.path.join(ROOT, "state")
 ANSWERS = os.path.join(STATE, "agent-answers.json")
 GATE = os.path.join(STATE, "gate.jsonl")
-JUDGE_MODEL = os.environ.get("GENIUS_ASK_JUDGE", "sonnet")
 JUDGE_SECONDS = 90
-ASK_MIN = 0.55           # cosine below this does not bear on the question (as bin/lib/gate.py)
+ASK_MIN = 0.55          # cosine below this does not bear on the question (as bin/lib/gate.py)
 KEEP = 50                # items kept in state/agent-answers.json
 
 # What the watcher never answers, whatever the base or the judge says: the user's own word (AGENTS.md
@@ -199,11 +202,9 @@ def precedent(question, project):
         return []
 
 
-def judge(question, options, rows, project):
-    """{"covered", "option", "answer", "source"} from the judge, or None when it cannot be asked."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ANTHROPIC_")}
-    env.pop("CLAUDE_CODE_SUBAGENT_MODEL", None)
-    env["GENIUS_JUDGE"] = "1"                            # our own hooks stay out of the judge's session
+def judge(question, options, rows, project, labels=None):
+    """{"covered", "option", "answer", "source"} from the judge role, or None when it cannot be asked.
+    ``labels`` names the agent that asked, so a link of its own family never judges it."""
     prompt = (
         "You answer a question that an unattended coding agent asked its user. Answer ONLY from the user's own "
         "earlier words below — never from your own opinion, never for a decision the user has not made.\n\n"
@@ -219,12 +220,10 @@ def judge(question, options, rows, project):
         + ("Options:\n" + "\n".join(f"{i + 1}. {t}" for i, t in enumerate(options)) + "\n" if options else "")
         + "\nThe user's own earlier words (source · project · kind):\n"
         + "\n".join(f"- [{r['source']} · {r['project'] or '—'} · {r['kind']}] {r['text'][:400]}" for r in rows))
-    try:
-        r = subprocess.run(["claude", "-p", "--model", JUDGE_MODEL, "--max-turns", "1", "--tools", "", "--", prompt],
-                           capture_output=True, text=True, timeout=JUDGE_SECONDS, env=env, cwd=ROOT)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    m = re.search(r"\{.*\}", r.stdout or "", re.S)
+    text, _link, _notes = judge_role.ask(
+        prompt, judged=judge_role.judged_of_model((labels or {}).get("genius.model")),
+        budget=JUDGE_SECONDS, num_predict=300, temperature=0.2)
+    m = re.search(r"\{.*\}", text or "", re.S)
     if not m:
         return None
     try:
@@ -284,7 +283,7 @@ def settle(name, question, options, cursor, project, kind, labels, cwd="",
     rows = (find or precedent)(question, project)
     if not rows:
         return False
-    got = (ask or judge)(question, options, rows, project)
+    got = (ask or judge)(question, options, rows, project, labels)
     if not got or not got.get("covered"):
         return False
     index = index_of(got.get("option"), options)
@@ -425,15 +424,15 @@ def selftest():
     def find(q, project):
         return rows
 
-    def judge_yes(q, options, r, project):
+    def judge_yes(q, options, r, project, labels=None):
         asked.append(q)
         return {"covered": True, "option": 1, "answer": "pnpm", "source": "log 2026-11-17 19:40"}
 
-    def judge_no(q, options, r, project):
+    def judge_no(q, options, r, project, labels=None):
         asked.append(q)
         return {"covered": False, "option": 0, "answer": "", "source": ""}
 
-    def judge_silent(q, options, r, project):
+    def judge_silent(q, options, r, project, labels=None):
         asked.append(q)
         return None
 
@@ -480,18 +479,14 @@ def selftest():
     ok = settle("ch7", "Який менеджер?", ["pnpm"], 0, "genius-ai", "dialog", {"role": "code"},
                 find=find, ask=judge_yes, keys=keys_ok, send=send_ok)
     check("an agent without genius.role is never answered", not ok)
-    before, real_run = len(keys), subprocess.run
-
-    def slow(*_a, **_k):
-        raise subprocess.TimeoutExpired("claude", JUDGE_SECONDS)
-
-    subprocess.run = slow
-    try:                                             # the judge itself, through settle: a timeout is silence
+    before, real_ask = len(keys), judge_role.ask
+    judge_role.ask = lambda *a, **k: ("", None, ["no judge in the selftest"])
+    try:                                             # the judge itself, through settle: silence is no answer
         ok = settle("ch10", "Який менеджер?", ["pnpm"], 0, "genius-ai", "dialog", labels,
                     find=find, ask=None, keys=keys_ok, send=send_ok)
     finally:
-        subprocess.run = real_run
-    check("the judge times out → the user", not ok and len(keys) == before, f"ok={ok}")
+        judge_role.ask = real_ask
+    check("the judge silent → the user", not ok and len(keys) == before, f"ok={ok}")
     check("a dialog of an agent without genius.role is not answered", not dialog("ch8", {"labels": {"role": "code"}}, SCREEN, ""))
     check("an agent with no question is not asked", not stopped("ch9", {"labels": labels}, "Готово, тести зелені.", ""))
     print(("\nFAILED: " + ", ".join(fails)) if fails else "\nall checks pass")
@@ -512,18 +507,18 @@ def demo():
     print("\n1) the base covers it:")
     print("   answered:", settle("demo-agent", c["question"], c["options"], c["cursor"], "genius-ai", "dialog",
                                  labels, find=lambda q, p: rows,
-                                 ask=lambda q, o, r, p: {"covered": True, "option": 1, "answer": "pnpm",
+                                 ask=lambda q, o, r, p, l=None: {"covered": True, "option": 1, "answer": "pnpm",
                                                         "source": "log 2026-11-17 19:40"},
                                  keys=lambda n, i, cur, q: True, send=lambda n, t: True))
     print("\n2) nothing in the base decides it (the judge says not covered):")
     print("   answered:", settle("demo-agent", "Який сервер взяти для бази?", ["Postgres", "SQLite"], 0, "genius-ai",
                                  "dialog", labels, find=lambda q, p: rows,
-                                 ask=lambda q, o, r, p: {"covered": False}, keys=lambda n, i, cur, q: True,
+                                 ask=lambda q, o, r, p, l=None: {"covered": False}, keys=lambda n, i, cur, q: True,
                                  send=lambda n, t: True), "→ the user, as before")
     print("\n3) a push or a merge: the rules deny it before the judge:")
     print("   answered:", settle("demo-agent", "Залити PR у develop?", ["Так", "Ні"], 0, "genius-ai", "dialog",
                                  labels, find=lambda q, p: rows,
-                                 ask=lambda q, o, r, p: {"covered": True, "option": 1, "answer": "Так"},
+                                 ask=lambda q, o, r, p, l=None: {"covered": True, "option": 1, "answer": "Так"},
                                  keys=lambda n, i, cur, q: True, send=lambda n, t: True), "→ the user")
     print("\nitems for the panel:", json.dumps(items(), ensure_ascii=False, indent=2))
     print("gate.jsonl:\n" + (open(GATE).read() if os.path.exists(GATE) else "(none)"))

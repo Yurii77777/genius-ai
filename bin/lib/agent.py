@@ -3,7 +3,7 @@
     bin/genius agent <role> <name> <folder> "<brief>"
     bin/genius agent roles                      the mapping in force, and where each model comes from
 
-    <role>    code · review · final-review · research · bulk · watch · look · render   (or a model: deepseek, flash, claude, codex)
+    <role>    code · review · final-review · research · bulk · watch · look · render · judge   (or a model: deepseek, flash, claude, codex)
     <name>    the terminal name in Herdr, «<tag>-<task>» (1-32 of a-z 0-9 - _)
     <folder>  where it works: a folder Claude Code already trusts (a project's path)
 
@@ -23,6 +23,8 @@ Providers:
 - codex    the Codex CLI. No Claude Code hooks: its brief carries the knowledge search command.
 - claude   Claude Code as is (optionally a model: "model": "sonnet").
 A provider whose limits are nearly spent (bin/genius models: 5 h or 7 d ≥ 95 %) gives way to its fallback.
+With "claude_fallback": false in genius.config.json, Claude is the coordinator only and never a stand-in: a role
+whose chain cannot work starts nothing and says why. A project that allows Claude may still use it.
 
 Every brief gets the standard ending (ask, do not invent; stop what you start; the heavy queue; the
 knowledge base) from the script, so no brief forgets it. Before the critic's notes it also gets the context of
@@ -71,6 +73,12 @@ DEFAULT_ROLES = {
     # provider than the one that wrote it — here Claude, the coordinator). Never Claude: it would prove nothing.
     "critic":       {"chain": [{"provider": "codex"}, O("kimi-k3.1-pro:cloud"), O(FAST)],
                      "about": "the critic of a brief before an agent starts: another provider than the author"},
+    # The judge of an action or a question that no rule decides (bin/lib/judge.py; the owner's decision of
+    # 2026-11-20). The local Ollama first, because it costs the user nothing; Claude last, because a judge call on
+    # it spends the user's own 5-hour window. The family of the agent judged is always skipped.
+    "judge":        {"chain": [O("kimi-k3.1-pro:cloud"), O("glm-5.3:cloud"), O(FAST), {"provider": "codex"},
+                               {"provider": "claude", "model": "sonnet"}],
+                     "about": "the gate's verdict on an action and the watcher's answer to a question"},
     # Drawing an image. Claude cannot draw. A local image model is the LAST link, for when Codex has no limits
     # left (the user's decision of 2026-11-17): it is heavy for the computer, so it has a guard. Add it in the
     # config, the product does not know your local model:
@@ -196,6 +204,11 @@ def pick(role_name, project):
         if i:
             notes.append(f"fallback {i}: {label}")
         return dict(link), notes
+    if not (allowed and "claude" in allowed) and \
+            read(os.path.join(ROOT, "genius.config.json"), {}).get("claude_fallback", True) is False:
+        # The owner's choice (config «claude_fallback»: false): Claude is the coordinator, never a stand-in for a
+        # cheap model. A role with no live link starts nothing and says why.
+        sys.exit(f"no model of «{role_name}» can work now (Claude fallback is off): " + "; ".join(notes))
     # Nothing in the chain can work (not installed, no subscription, not allowed for this project): Claude Code
     # itself is the one provider every install has, so the work is never refused — the note says why.
     # A working role on Claude takes the cheaper Claude model: the coordinator's own model is for judgement.
@@ -294,6 +307,7 @@ def command(spec, brief):
         env = {"ANTHROPIC_BASE_URL": OLLAMA, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_MODEL": model,
                "ANTHROPIC_DEFAULT_OPUS_MODEL": model, "ANTHROPIC_DEFAULT_SONNET_MODEL": FAST,
                "ANTHROPIC_DEFAULT_HAIKU_MODEL": FAST, "CLAUDE_CODE_SUBAGENT_MODEL": FAST,
+               "GENIUS_AGENT_MODEL": model,                # the gate skips a judge of the agent's own family
                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false"}
         exports = " ".join(f"{k}={v}" for k, v in env.items())
         # «auto» mode cannot work through Ollama (its safety check runs on Anthropic's servers): the agent runs in
@@ -304,11 +318,16 @@ def command(spec, brief):
     if spec["provider"] == "codex":
         model = spec.get("model", "")
         flag = f'-m {model} ' if model else ""
-        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 GENIUS_AUTHOR=codex exec codex {flag}"$0"', brief]
+        # No approval prompt (owner 20.11: «я три рази відповідав агентам»): Codex writes only in its folder and in
+        # genius-ai's state (the heavy queue), may use the network, and is never asked.
+        box = (f'-s workspace-write -a never -c sandbox_workspace_write.network_access=true '
+               f'--add-dir "{os.path.join(ROOT, "state")}" ')
+        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 GENIUS_AUTHOR=codex exec codex {box}{flag}"$0"', brief]
     model = spec.get("model", "")
     flag = f"--model {model} " if model else ""
     return model or "claude", ["zsh", "-lic", f'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false GENIUS_AGENT=1 '
-                                              f'GENIUS_AUTHOR=claude SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 '
+                                              f'GENIUS_AUTHOR=claude GENIUS_AGENT_MODEL={model or "claude"} '
+                                              f'SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 '
                                               f'exec claude {flag}"$0"', brief]
 
 

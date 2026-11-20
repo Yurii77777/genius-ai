@@ -20,8 +20,8 @@ For each sub-agent (a Herdr terminal with a parent) one pass does this:
   gets one line, so it reads the report. Once per turn of the agent.
 - A permission dialog of a task agent (label genius.role) → the gate decides it, like any other action
   of that agent (the user's decision of 2026-11-17: «потрібно думати як мене розвантажити»): the action on
-  the screen goes to bin/lib/gate.py (its rules, the user's earlier decisions in the knowledge base, Claude
-  as the judge). Allow → the watcher picks the dialog's one-time «Yes»; deny or unclear → the alert to the
+  the screen goes to bin/lib/gate.py (its rules, the user's earlier decisions in the knowledge base, the role
+  «judge» as the last word). Allow → the watcher picks the dialog's one-time «Yes»; deny or unclear → the alert to the
   user, as before. Every answer is written to state/gate.jsonl ("via": "watcher"). A task agent's trust
   dialog in a folder of a configured project is answered «trust» (the user's decision of 2026-11-17); a
   trust dialog anywhere else, and a dialog of any other agent, is never answered.
