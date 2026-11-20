@@ -1,5 +1,8 @@
 """Pending operations: a careful, regular cleanup (the user's decision of 2026-11-12).
 
+    bin/genius ops add "<what>" [--project p] [--ask "…"] [--answers "a|b"] [--check "cmd"] [--next "…"]
+                                         one operation at once (an `ask` makes it wait for the user,
+                                         `needs: user`); the handoff guard prints the ready command
     bin/genius ops review [--days N]     every operation: its age, days since its last update, and the
                                          output of its read-only `check`; marks the ones to look at
     bin/genius ops close <id> <why>      move one operation to state/operations.closed.json, with the why
@@ -110,6 +113,19 @@ def touch(op_id):
     sys.exit(f"no operation «{op_id}»")
 
 
+def remember(o, text):
+    """The user's answer becomes knowledge (AGENTS.md «Log of the day and knowledge»): the question and the
+    answer in one record, kind decision, with the project. The day log keeps the raw words of the answer;
+    this record names the pair and the project. In the background: a button never waits for a model."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+        import know
+        know.add_later(f"{o.get('ask') or o.get('what') or o['id']} → {text}", o.get("project", ""),
+                       "decision", f"ops answer {o['id']}")
+    except Exception:
+        pass
+
+
 def answer(op_id, text):
     ops = read(OPS, [])
     for o in ops:
@@ -119,6 +135,7 @@ def answer(op_id, text):
             o.pop("stale", None)
             o["updated"] = date.today().isoformat()
             write(OPS, ops)
+            remember(o, text)
             print(f"answered: {op_id} — {text}")
             return
     sys.exit(f"no operation «{op_id}»")
@@ -133,6 +150,61 @@ def later(op_id):
             print(f"later: {op_id}")
             return
     sys.exit(f"no operation «{op_id}»")
+
+
+def slug(text, fallback="op"):
+    """A readable id: «lw ask about the price» → «lw-ask-about-the-price» (ASCII only, never empty)."""
+    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
+    return s[:48].strip("-") or fallback
+
+
+def unique_id(ops, wanted):
+    taken = {o.get("id") for o in ops}
+    op_id, n = wanted, 2
+    while op_id in taken:
+        op_id, n = f"{wanted}-{n}", n + 1
+    return op_id
+
+
+def build(ops, what, project="", ask="", answers=(), check="", nxt="", done_when="",
+          op_id="", needs="", queue="", waiting_for=""):
+    """One operation as the scripts read it (AGENTS.md «Pending operations»). An operation with `ask`
+    waits for the user (`"needs": "user"`) and carries the choices the panel shows as buttons."""
+    what = (what or "").strip()
+    if not what:
+        raise ValueError("ops add needs a «what»: one short line about the work")
+    op = {"id": unique_id(ops, slug(op_id or f"{project} {what}")), "project": project,
+          "what": what, "waiting_for": (waiting_for or ask).strip(),
+          "check": (check or "").strip() or "echo manual", "next": nxt,
+          "started": date.today().isoformat(), "updated": date.today().isoformat()}
+    if ask.strip():
+        op["ask"] = ask.strip()
+        needs = needs or "user"
+    if needs:
+        op["needs"] = needs
+    answers = [a.strip() for a in answers if a and a.strip()]
+    if answers:
+        op["answers"] = answers
+    if done_when.strip():
+        op["done_when"] = done_when.strip()
+    if queue:
+        op["queue"] = queue
+    return op
+
+
+def add(what, project="", ask="", answers=(), check="", nxt="", done_when="",
+        op_id="", needs="", queue="", waiting_for="", path=None):
+    path = path or OPS
+    ops = read(path, [])
+    op = build(ops, what, project, ask, answers, check, nxt, done_when, op_id, needs, queue, waiting_for)
+    ops.append(op)
+    write(path, ops)
+    print(f"added: {op['id']} — {op['what']}")
+    if op.get("ask"):
+        print(f"  question: «{op['ask']}»"
+              + (f" · answers: {' / '.join(op['answers'])}" if op.get("answers") else ""))
+    print(f"  the panel and the handoff quote it as `{op['id']}`")
+    return op
 
 
 SWEEP_LABEL = "genius-ai.ops-sweep"
@@ -204,13 +276,15 @@ def sweep():
                     f["stale"] = date.today().isoformat()
             write(OPS, fresh)
             marked.append(o["id"])
-    try:   # tickets that became ready since the last pass get a critique (bin/lib/ticket.py); never breaks the sweep
-        import ticket
-        critiqued = ticket.sweep()
+    try:   # tickets that became ready since the last pass get a critique, a finished one its apply step
+        sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+        import ticket          # (bin/lib/ticket.py); never breaks the sweep
+        started, applied = ticket.sweep()
+        critiqued = f"started {started or 'none'}, applied {applied or 'none'}"
     except Exception as e:
-        critiqued = [f"error {type(e).__name__}"]
+        critiqued = f"error {type(e).__name__}"
     stamp = datetime.now().isoformat(timespec="seconds")
-    print(f"{stamp} sweep: critiques started {critiqued or 'none'}")
+    print(f"{stamp} sweep: critiques {critiqued}")
     print(f"{stamp} sweep: closed {closed or 'none'}; stale {marked or 'none'}")
 
 
@@ -276,9 +350,69 @@ def loop_job(action, label, args, every, log):
         print(f"running (pid {pid})" if pid else "not running")
 
 
+PARAMS = {"project", "ask", "answers", "check", "next", "done-when", "id", "needs", "queue", "waiting-for"}
+
+
+def selftest():
+    """No file of the install is touched: build(), unique_id() and one temp file."""
+    import tempfile
+
+    op = build([], "Ask about the price", project="lw", ask="Чи підняти ціну з 1 грудня?",
+               answers=["yes", "later"], nxt="tell the user the answer")
+    assert op["id"] == "lw-ask-about-the-price", op["id"]
+    assert op["needs"] == "user" and op["answers"] == ["yes", "later"], op
+    assert op["check"] == "echo manual" and op["waiting_for"] == op["ask"], op
+    assert op["started"] == date.today().isoformat() and op["next"] == "tell the user the answer", op
+    plain = build([op], "Watch the CI", project="lw", check="gh run list")
+    assert "needs" not in plain and "ask" not in plain and plain["id"] == "lw-watch-the-ci", plain
+    assert unique_id([op], op["id"]) == op["id"] + "-2", unique_id([op], op["id"])
+    assert slug("  ") == "op" and slug("PR #12 — merge!") == "pr-12-merge", slug("PR #12 — merge!")
+    assert build([], "x", done_when="true", queue="next", needs="user")["done_when"] == "true"
+    assert build([], "x", queue="next")["queue"] == "next"
+    assert "queue" not in build([], "x", needs="user")
+    try:
+        build([], "  ")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an operation without a «what» must be refused")
+
+    # the command line of `ops add` (the handoff guard prints exactly this form)
+    o, rest = opts(["Ask", "about", "the", "price", "--project", "lw", "--ask", "Чи підняти ціну?",
+                    "--answers", "yes|later", "--next", "tell the user", "--done-when", "true"], PARAMS)
+    assert rest == ["Ask", "about", "the", "price"], rest
+    assert o["project"] == "lw" and o["answers"] == "yes|later" and o["next"] == "tell the user", o
+    assert o["done-when"] == "true" and opts(["--unknown", "x"], PARAMS) == ({}, ["--unknown", "x"])
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "operations.json")
+        first = add("Ask about the price", project="lw", ask="Підняти ціну?", path=path)
+        second = add("Ask about the price", project="lw", ask="Підняти ціну?", path=path)
+        assert [o["id"] for o in read(path, [])] == [first["id"], second["id"]], read(path, [])
+        assert second["id"] == first["id"] + "-2", second["id"]
+        assert read(path, [])[0]["needs"] == "user"
+    print("ops selftest: ok")
+
+
+def opts(args, names):
+    """--name value pairs out of args; the rest stays positional (the «what» of `ops add`)."""
+    rest, out, i = [], {}, 0
+    while i < len(args):
+        a = args[i]
+        if a.startswith("--") and a[2:] in names:
+            out[a[2:]] = args[i + 1] if i + 1 < len(args) else ""
+            i += 2
+        else:
+            rest.append(a)
+            i += 1
+    return out, rest
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
-    if not args or args[0] == "review":
+    if args[:1] == ["selftest"]:
+        selftest()
+    elif not args or args[0] == "review":
         days = int(args[args.index("--days") + 1]) if "--days" in args else STALE_DAYS
         review(days)
     elif args[0] == "close" and len(args) >= 3:
@@ -289,9 +423,22 @@ if __name__ == "__main__":
         answer(args[1], " ".join(args[2:]))
     elif args[0] == "later" and len(args) == 2:
         later(args[1])
+    elif args[0] == "add":
+        o, rest = opts(args[1:], PARAMS)
+        what = " ".join(rest).strip()
+        if not what:
+            sys.exit("usage: bin/genius ops add \"<what>\" [--project p] [--ask \"…\"] [--answers \"a|b\"] "
+                     "[--check \"cmd\"] [--next \"…\"] [--done-when \"cmd\"] [--id x] [--needs user] "
+                     "[--queue next] [--waiting-for \"…\"]")
+        add(what, project=o.get("project", ""), ask=o.get("ask", ""),
+            answers=(o.get("answers") or "").split("|"), check=o.get("check", ""), nxt=o.get("next", ""),
+            done_when=o.get("done-when", ""), op_id=o.get("id", ""), needs=o.get("needs", ""),
+            queue=o.get("queue", ""), waiting_for=o.get("waiting-for", ""))
     elif args[0] == "sweep" and len(args) == 1:
         sweep()
     elif args[0] == "sweep" and args[1] in ("start", "stop", "status"):
         sweep_job(args[1])
     else:
-        sys.exit("usage: bin/genius ops review [--days N] | close <id> <why> | touch <id> | answer <id> <text> | later <id> | sweep [start|stop|status]")
+        sys.exit("usage: bin/genius ops add \"<what>\" [--project p] [--ask \"…\"] [--answers \"a|b\"] [--check \"cmd\"] "
+                 "[--next \"…\"] | review [--days N] | close <id> <why> | touch <id> | answer <id> <text> | later <id> | "
+                 "sweep [start|stop|status] | selftest")
