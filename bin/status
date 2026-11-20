@@ -300,7 +300,13 @@ def pr_findings(prs, stale_days=3, now=None):
 
 
 UNPUSHED_TTL = 600                                  # 10 min: the panel asks often, git is not cheap
-IGNORED_UNCOMMITTED = re.compile(r"(^|/)(next-env\.d\.ts|\.doc-index|tmp)(/|$)")
+# Noise on a worktree is not work: a generated file, a dependency folder, a scratch note (the user's
+# decision of 2026-11-20).
+IGNORED_UNCOMMITTED = re.compile(
+    r"(^|/)(next-env\.d\.ts|\.doc-index|tmp|node_modules|\.brief\.md|\.brand-profile-source\.png|\.tmp-[^/]*)(/|$)")
+# A long-lived integration branch is not work outside a PR (the user's decision of 2026-11-20);
+# project.json → "integration": ["release"] adds the project's own.
+INTEGRATION = {"main", "master", "develop", "development", "dev", "staging", "release", "production", "prod"}
 
 
 def default_branch(path):
@@ -362,11 +368,12 @@ def ahead_of(path, base_ref):
     return {b.strip(): 1 for b in names if b.strip()}
 
 
-def branches_without_pr(path, base, base_ref, heads):
+def branches_without_pr(path, base, base_ref, heads, skip=()):
     """[{"branch", "commits"}] — branches with commits that origin/<base> does not hold even as a patch
-    (`git cherry`: "+" only), and that no open PR has as its head."""
+    (`git cherry`: "+" only), and that no open PR has as its head. Integration branches are left out."""
     counts = ahead_of(path, base_ref)
-    candidates = [b for b in counts if b != base and b not in heads and counts[b] > 0]
+    skip = set(skip) | {base}
+    candidates = [b for b in counts if b not in skip and b not in heads and counts[b] > 0]
     if not candidates:
         return []
     def extra(branch):
@@ -376,7 +383,7 @@ def branches_without_pr(path, base, base_ref, heads):
     return [{"branch": b, "commits": len(x)} for b, x in zip(candidates, found) if x]
 
 
-def unpushed(path, name, repo, env=None):
+def unpushed(path, name, repo, env=None, meta=None):
     """Branches and worktrees whose work waits only on this Mac: no PR, not in origin/<default>.
 
     The owner's goal of 2026-11-20: work that nobody sees is work that nobody merges. A branch counts
@@ -398,7 +405,8 @@ def unpushed(path, name, repo, env=None):
         # `gh` did not answer (None): a branch is not proven to have no PR, so nothing is called unpushed
         heads = {x.get("headRefName") for x in prs or [] if x.get("headRefName")} if prs is not None else None
         if heads is not None:
-            data["branches"] = branches_without_pr(path, base, base_ref, heads)
+            skip = INTEGRATION | set((meta or {}).get("integration") or [])
+            data["branches"] = branches_without_pr(path, base, base_ref, heads, skip)
     trees = [w for w in worktree_list(sh("git", "-C", path, "worktree", "list", "--porcelain"))
              if os.path.realpath(w["path"]) != os.path.realpath(path)]
     def dirty(wt):
@@ -472,6 +480,10 @@ def selftest():
              " M src/page.tsx\nR  old/name.ts -> new/name.ts\n?? src/tmpfile.ts\n")
     assert dirty_files(dirty) == ["src/page.tsx", "old/name.ts", "new/name.ts", "src/tmpfile.ts"], dirty_files(dirty)
     assert dirty_files("") == []
+    noise = ("?? apps/web/.brief.md\n?? .brand-profile-source.png\n?? node_modules\n"
+             "?? apps/api/.tmp-bc-create.ts\n?? apps/web/next-env.d.ts\n M src/real.ts\n")
+    assert dirty_files(noise) == ["src/real.ts"], dirty_files(noise)
+    assert {"develop", "main", "staging"} <= INTEGRATION, INTEGRATION
     assert cherry_extra("+ " + "d" * 40 + "\n- " + "e" * 40 + "\n") == ["d" * 40]
     assert cherry_extra("") == []
 
@@ -635,7 +647,7 @@ def project_state(p, services, ops):
                 problem(f"main: {wf} failure", run_url)
     # Work that waits only on this Mac (the owner's goal of 2026-11-20): a branch outside every open PR
     # and a worktree with uncommitted files are invisible until someone names them.
-    for text, data in unpushed_findings(unpushed(path, name, repo, env)):
+    for text, data in unpushed_findings(unpushed(path, name, repo, env, meta)):
         problem(text, "", data)
     for s in services:
         if s.get("project") == name and s.get("type") == "url":
