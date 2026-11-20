@@ -28,7 +28,7 @@
 # bin/genius loop <owner/repo> <N> [--project p] [--max-rounds 4]   the fix↔review loop of one PR, by script;
 #                                 the coordinator gets the final verdict only (bin/lib/review_loop.py)
 # bin/genius load [one-stack|normal]   the load guard: no local stack while local model work runs (bin/lib/load.py)
-# bin/genius gate log | test …    the gate that answers every action of an unattended agent (bin/lib/gate.py)
+# bin/genius gate log | test | chain   the gate that answers every action of an unattended agent (bin/lib/gate.py)
 # bin/genius know search|add|ingest|stats   the knowledge base: local vector search over what the user said (bin/lib/know.py)
 # bin/genius herdr install [--show] | uninstall | status   the status shelves in Herdr (bin/lib/herdr.py)
 cd "$(dirname "$0")/.." || exit 1
