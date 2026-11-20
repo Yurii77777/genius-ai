@@ -441,6 +441,20 @@ The user's decision of 2026-11-17: 8 of 9 PR reviews were «request changes», b
 - `project.json` → `tracker`: optional `keys` (Jira project keys), `ready_jql` (tickets in the AE-ready status); for GitHub `{"type": "github", "repo": "owner/repo", "ae_label": "<label>", "account": "<gh-login>"}` — `account` is the login that reads the repo; without it the active `gh` login is used.
 - The checklist, one line each: (1) every requirement is an AC with a test that can fail, and a helper-only test is flagged; (2) contradictions between ticket, spec and code, with file:line; (3) NFRs as ACs: security, quality gate, docs; (4) edge cases: failure of each external service, retries, empty/huge input, concurrency; (5) every needed file is in the scope list, Dependencies equal the tracker links; (6) the estimate block validates.
 
+## The fix↔review loop of a PR
+
+The owner's goal of 2026-11-20: «не бачиш кінця дороги — посилай іншого; ти лише фінальне рев'ю і апрув». The fix and the review of one PR run by script; the coordinator gets the final verdict only (`bin/lib/review_loop.py`).
+
+- `bin/genius loop <owner/repo> <N> [--project p] [--max-rounds 4]` starts it on an open PR; `bin/genius loop status` shows every loop.
+- A round: a `review` agent (the role chain: Codex → Claude) reads the head worktree and the PR, and writes one `VERDICT: APPROVE` or `VERDICT: REQUEST CHANGES`, plus `PRODUCT QUESTION: none` or one exact question. Request changes → a `code` agent fixes in the same worktree, commits and ends with `READY FOR REVIEW <sha>`; then the next review starts.
+- The worktree: the clean one that already holds the head branch, else `<project>/.claude/worktrees/review-<N>` on branch `review-<N>` from `origin/<head>`. The review agent never writes a file.
+- Push rule, per project: `"loop": {"push": true}` in `projects/<name>/project.json` → the SCRIPT pushes the fix commit to the PR's own branch after every round, fast-forward only, never a force (LW: our side pushes review fixes). Without it the script only commits and the push stays the coordinator's step (chica: «do not push each commit»). No agent ever pushes.
+- The watcher (`bin/lib/agents_watch.py`) hands each finished turn of a loop agent to the loop: no operation per round, no answer from the knowledge base. The loop kills each agent after its turn.
+- Stops: approve → ONE line `[review-loop] #N approved at <sha> after K rounds — final review`. Max rounds, a product question, or an agent that wrote nothing a script can read → one operation `loop-<repo>-<N>` with `needs: user` and the exact question, plus one line here. Never a silent end, never a question in the chat.
+- Every spawn goes through `bin/genius agent`, so the brief critic and the project's provider limits apply (AGENTS.md «Models»).
+- Files: `state/review-loop/<key>.json` (the state), `<key>.jsonl` (one line per event), `<key>-r<k>-review.md` and `<key>-r<k>-fix.md` (what each agent wrote).
+- `python3 -I bin/lib/review_loop.py selftest`: a temp root, a fake hc, canned reports — approve after 2 rounds, a product question, the round limit, no verdict.
+
 ## Load on this computer
 
 The lesson of 2026-11-09: the user works on the same Mac. Keep the load low.

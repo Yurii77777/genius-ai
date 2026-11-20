@@ -127,12 +127,17 @@ def main():
     if through:
         print("     also passes the critic: " + ", ".join(sorted(set(through))))
 
-    # 5) the start paths that hand a brief to bin/genius agent, and so inherit the critic
-    for name in ("ticket.py", "prfix.py"):
-        src = text(os.path.join(LIB, name))
-        direct = starts_agent(os.path.join(LIB, name))
-        check(f"bin/lib/{name} starts its agent through bin/genius agent",
-              not direct and re.search(r'"agent",\s*"(code|review)"', src) is not None, str(direct))
+    # 5) every start path that hands a brief to bin/genius agent, and so inherits the critic. The list is
+    # read from the code, not written by hand: a new start path is covered the day it appears.
+    for name in sorted(os.listdir(LIB)):
+        if not name.endswith(".py") or name == "agent.py":
+            continue
+        path = os.path.join(LIB, name)
+        src = text(path)
+        if not re.search(r'"agent",\s*(role|brief|"[a-z-]+")', src):
+            continue                        # no start of an agent: a shell loop, a command, or nothing
+        direct = starts_agent(path)
+        check(f"bin/lib/{name} starts its agent through bin/genius agent", not direct, str(direct))
 
     # 6) one word away
     check("bin/genius routes selfcheck", "selfcheck" in text(os.path.join(ROOT, "bin", "genius")))
