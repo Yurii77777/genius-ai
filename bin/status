@@ -346,6 +346,36 @@ def cherry_extra(text):
     return [l[2:].strip() for l in (text or "").splitlines() if l.startswith("+ ")]
 
 
+def ahead_of(path, base_ref):
+    """{branch: commits ahead of base_ref} in ONE `git for-each-ref` (ahead-behind, git 2.41); an older
+    git prints the format literally, then every branch is counted alone."""
+    refs = sh("git", "-C", path, "for-each-ref", "--format=%(refname:short) %(ahead-behind:" + base_ref + ")",
+              "refs/heads")
+    ahead = {}
+    for line in refs.splitlines():
+        parts = line.rsplit(" ", 2)
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            ahead[parts[0]] = int(parts[1])
+    if ahead:
+        return ahead
+    names = sh("git", "-C", path, "for-each-ref", "--format=%(refname:short)", "refs/heads").splitlines()
+    return {b.strip(): 1 for b in names if b.strip()}
+
+
+def branches_without_pr(path, base, base_ref, heads):
+    """[{"branch", "commits"}] — branches with commits that origin/<base> does not hold even as a patch
+    (`git cherry`: "+" only), and that no open PR has as its head."""
+    counts = ahead_of(path, base_ref)
+    candidates = [b for b in counts if b != base and b not in heads and counts[b] > 0]
+    if not candidates:
+        return []
+    def extra(branch):
+        return cherry_extra(sh("git", "-C", path, "cherry", base_ref, branch))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        found = list(pool.map(extra, candidates))
+    return [{"branch": b, "commits": len(x)} for b, x in zip(candidates, found) if x]
+
+
 def unpushed(path, name, repo, env=None):
     """Branches and worktrees whose work waits only on this Mac: no PR, not in origin/<default>.
 
@@ -353,7 +383,8 @@ def unpushed(path, name, repo, env=None):
     when `git cherry origin/<default> <branch>` shows a commit ("+" only: a cherry-picked or rebased
     branch is not flagged) and no open PR has it as its head. A worktree counts when it holds
     uncommitted files other than next-env.d.ts, .doc-index and tmp/. One `gh pr list` per repo (the
-    PR cache of this script), the answer cached for 10 minutes in state/unpushed-cache.json."""
+    PR cache of this script); the answer is cached for 10 minutes in state/unpushed-cache.json, and
+    the per-branch and per-worktree git calls run in parallel."""
     cache_path = os.path.join(ROOT, "state", "unpushed-cache.json")
     cache = read_json(cache_path, {})
     hit = cache.get(name) or {}
@@ -363,25 +394,21 @@ def unpushed(path, name, repo, env=None):
     base = default_branch(path)
     base_ref = f"origin/{base}" if base else ""
     if base_ref and sh("git", "-C", path, "rev-parse", "--verify", "--quiet", base_ref):
-        prs = open_prs(repo, env) if repo else None
-        heads = {x.get("headRefName") for x in prs or [] if x.get("headRefName")}
-        branches = sh("git", "-C", path, "for-each-ref", "--format=%(refname:short)", "refs/heads")
-        for b in branches.splitlines():
-            b = b.strip()
-            if not b or b == base or b in heads:
-                continue
-            if sh("git", "-C", path, "rev-list", "--count", f"{base_ref}..{b}") in ("", "0"):
-                continue
-            extra = cherry_extra(sh("git", "-C", path, "cherry", base_ref, b))
-            if extra:
-                data["branches"].append({"branch": b, "commits": len(extra)})
-    for wt in worktree_list(sh("git", "-C", path, "worktree", "list", "--porcelain")):
-        if os.path.realpath(wt["path"]) == os.path.realpath(path):
-            continue                    # the main checkout: its count is already in the info line
-        files = dirty_files(sh("git", "-C", wt["path"], "status", "--porcelain"))
-        if files:
-            data["worktrees"].append({"path": wt["path"], "branch": wt["branch"],
-                                      "count": len(files), "files": files[:8]})
+        prs = open_prs(repo, env) if repo else []
+        # `gh` did not answer (None): a branch is not proven to have no PR, so nothing is called unpushed
+        heads = {x.get("headRefName") for x in prs or [] if x.get("headRefName")} if prs is not None else None
+        if heads is not None:
+            data["branches"] = branches_without_pr(path, base, base_ref, heads)
+    trees = [w for w in worktree_list(sh("git", "-C", path, "worktree", "list", "--porcelain"))
+             if os.path.realpath(w["path"]) != os.path.realpath(path)]
+    def dirty(wt):
+        return dirty_files(sh("git", "-C", wt["path"], "status", "--porcelain"))
+    if trees:                           # the main checkout is left out: its count is already in the info line
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for wt, files in zip(trees, list(pool.map(dirty, trees))):
+                if files:
+                    data["worktrees"].append({"path": wt["path"], "branch": wt["branch"],
+                                              "count": len(files), "files": files[:8]})
     cache[name] = {"at": time.time(), "repo": repo, "data": data}
     try:
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
