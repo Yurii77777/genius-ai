@@ -197,6 +197,29 @@ COPIED = (
 )
 
 
+def hook_input() -> dict:
+    """The hook's own input (session_id, cwd). An empty dict when a person runs the script by hand."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return {}
+        raw = sys.stdin.read()
+        return json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return {}
+
+
+def shelf_context(session: str = "") -> str:
+    """The coordinator's shelf (bin/lib/shelf.py, AGENTS.md «Live control»): what a long session forgets —
+    a step after the deploy, an approved decision with no PR, a branch outside every PR. A script builds
+    it; this session gets it as seen, so the first prompt does not say it again."""
+    try:
+        sys.path.insert(0, str(ROOT / "bin" / "lib"))
+        import shelf
+        return shelf.build(refresh=True, quiet=True, seen=session)
+    except Exception:
+        return ""
+
+
 def install_check(cfg: dict) -> str | None:
     """None = go on; else the context that replaces everything (AGENTS.md «Fresh start or continue»)."""
     sys.path.insert(0, str(ROOT / "bin" / "lib"))
@@ -334,9 +357,12 @@ def main() -> None:
         context = context + "\n" + live
 
     handoff = ROOT / "state" / "handoff.md"
+    shelf = shelf_context(hook_input().get("session_id", ""))
     if handoff.exists():                                # the summary the last session left (AGENTS.md)
         context = ("[genius-ai] HANDOFF from the last session (state/handoff.md) — start from it:\n"
-                   + handoff.read_text()[:4000] + "\n" + context)
+                   + handoff.read_text()[:4000] + ("\n" + shelf if shelf else "") + "\n" + context)
+    elif shelf:                                         # no handoff: the shelf is the first thing read
+        context = shelf + "\n" + context
 
     ops = pending_operations()
     if ops:
