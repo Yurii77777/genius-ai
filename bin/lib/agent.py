@@ -65,6 +65,10 @@ DEFAULT_ROLES = {
                      "about": "the last review before the user's word to merge: Claude only"},
     "look":         {"chain": [{"provider": "codex"}, {"provider": "claude"}],
                      "about": "see and judge an image: screenshots, mock-ups, design review (no Ollama model sees images)"},
+    # The critic of every brief (bin/lib/critic.py, the owner's rule of 2026-11-20: a brief is judged by another
+    # provider than the one that wrote it — here Claude, the coordinator). Never Claude: it would prove nothing.
+    "critic":       {"chain": [{"provider": "codex"}, O("kimi-k3.1-pro:cloud"), O(FAST)],
+                     "about": "the critic of a brief before an agent starts: another provider than the author"},
     # Drawing an image. Claude cannot draw. A local image model is the LAST link, for when Codex has no limits
     # left (the user's decision of 2026-11-17): it is heavy for the computer, so it has a guard. Add it in the
     # config, the product does not know your local model:
@@ -292,15 +296,18 @@ def command(spec, brief):
         exports = " ".join(f"{k}={v}" for k, v in env.items())
         # «auto» mode cannot work through Ollama (its safety check runs on Anthropic's servers): the agent runs in
         # «default» mode, and the gate (bin/lib/gate.py, a PreToolUse hook) answers every action, so no prompt waits
-        return model, ["zsh", "-lic", f'unset ANTHROPIC_API_KEY; {exports} GENIUS_AGENT=1 exec claude '
-                       f'--permission-mode default --settings "{gate_settings()}" "$0"', brief]
+        return model, ["zsh", "-lic", f'unset ANTHROPIC_API_KEY; {exports} GENIUS_AGENT=1 GENIUS_AUTHOR=ollama '
+                                      f'SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 exec claude '
+                                       f'--permission-mode default --settings "{gate_settings()}" "$0"', brief]
     if spec["provider"] == "codex":
         model = spec.get("model", "")
         flag = f'-m {model} ' if model else ""
-        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 exec codex {flag}"$0"', brief]
+        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 GENIUS_AUTHOR=codex exec codex {flag}"$0"', brief]
     model = spec.get("model", "")
     flag = f"--model {model} " if model else ""
-    return model or "claude", ["zsh", "-lic", f'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false GENIUS_AGENT=1 exec claude {flag}"$0"', brief]
+    return model or "claude", ["zsh", "-lic", f'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false GENIUS_AGENT=1 '
+                                              f'GENIUS_AUTHOR=claude SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 '
+                                              f'exec claude {flag}"$0"', brief]
 
 
 def show_roles():
@@ -329,7 +336,19 @@ def main():
         sys.exit(f"bad name «{name}»: 1-32 of a-z 0-9 - _")
     if not os.path.isdir(folder):
         sys.exit(f"no folder {folder}")
-    spec, notes = pick(role_name, project_of(folder))
+    project = project_of(folder)
+    spec, notes = pick(role_name, project)
+    # The critic (the owner's rule of 2026-11-20): every brief is read by a model of ANOTHER provider before the
+    # agent starts, and its notes go into the brief. It never blocks the start: no answer within 40 s → no notes,
+    # and state/brief-critic.jsonl says why. There is no switch: a brief without the critic is not a brief.
+    import critic
+    critique = critic.notes_for(brief, folder, project.get("name", ""), author=os.environ.get("GENIUS_AUTHOR") or "claude")
+    if critique["notes"]:
+        brief = brief + "\n\n" + critic.block(critique["notes"])
+        notes.append(f"critic: {critique['provider']} · {len(critique['notes'].splitlines())} lines · "
+                     f"{int(critique['ms'] / 1000)} s")
+    else:
+        notes.append(f"critic: no notes ({critique['why']})")
     if not shutil.which("hc"):
         # No Herdr: nothing to show the agent in. The coordinator runs it as an internal subagent instead;
         # this prints what the role resolved to, and the ending every brief must carry.

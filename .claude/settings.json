@@ -83,6 +83,17 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/bin/lib/critic.py\" hook 2>/dev/null || true",
+            "timeout": 60,
+            "statusMessage": "genius-ai: критика брифу"
+          }
+        ]
       }
     ],
     "PostToolUse": [
