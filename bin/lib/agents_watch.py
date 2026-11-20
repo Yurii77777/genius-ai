@@ -264,7 +264,7 @@ def answer_dialog(name, term, screen, project):
         import gate
         # Codex wraps a long one-line command over several screen lines; only a heredoc keeps real newlines
         command = ("\n".join(cmd) if any("<<" in c for c in cmd) else " ".join(c.strip() for c in cmd)).strip()
-        decision, why, via = gate.decide("Bash", {"command": command, "from_screen": True}, cwd, {})
+        decision, why, via, _provider = gate.decide("Bash", {"command": command, "from_screen": True}, cwd, {})
         with open(os.path.join(ROOT, "state", "gate.jsonl"), "a", encoding="utf-8") as f:
             f.write(json.dumps({"at": datetime.now().astimezone().isoformat(timespec="seconds"), "session": name, "cwd": cwd,
                                 "tool": "Bash", "input": command[:300], "decision": decision,
@@ -318,7 +318,7 @@ def answer_dialog(name, term, screen, project):
         ti = {"file_path": arg if os.path.isabs(os.path.expanduser(arg)) else os.path.join(cwd, arg)}
     sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
     import gate
-    decision, why, via = gate.decide(tool, ti, cwd, {})
+    decision, why, via, _provider = gate.decide(tool, ti, cwd, {})
     with open(os.path.join(ROOT, "state", "gate.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps({"at": datetime.now().astimezone().isoformat(timespec="seconds"), "session": name, "cwd": cwd,
                             "tool": tool, "input": json.dumps(ti, ensure_ascii=False)[:300], "decision": decision,
