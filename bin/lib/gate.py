@@ -672,6 +672,7 @@ def rules(tool, ti, cwd, h):
             return None, ""                              # the body of this heredoc is not in the command at all
         p = re.sub(r"^\s*(\w+=\S+\s+)+", "", p)          # leading VAR=value
         p = re.sub(r"^\s*(time|command)\s+", "", p)      # a plain wrapper: «time python3 …»
+        p = re.sub(r"^\s*command\s+-[vV]\s+", "which ", p)   # «command -v x» looks a program up, like which
         p = re.sub(r"^\s*[({]\s*", "", p)                 # a subshell or a group: «(cd x && ls)», «{ echo …»
         p = re.sub(r"\s*[)}]\s*$", "", p)
         p = re.sub(r"\s+2>&1\b|\s+2>\s*/dev/null\b", "", p)
@@ -704,7 +705,9 @@ def rules(tool, ti, cwd, h):
         if not SAFE_BASH.match(p):
             return None, ""
         if WRITE_PATHS.match(p) or re.search(r"(^|\s)>>?\s*\S", p):
-            targets = re.findall(r"(?:>>?\s*|\s)(/[^\s;|&]+|~[^\s;|&]*|\.\.[^\s;|&]*)", " " + p)
+            head = p.strip().split(None, 1)                  # the program itself is not a target
+            args = head[1] if len(head) > 1 else ""
+            targets = re.findall(r"(?:>>?\s*|\s)(/[^\s;|&]+|~[^\s;|&]*|\.\.[^\s;|&]*)", " " + args)
             targets = [t if t.startswith(("/", "~")) else os.path.join(cwd, t) for t in targets]
             if any(not any(inside(t, s) for s in spaces) for t in targets):
                 return None, ""                          # writing outside: let the judge look
