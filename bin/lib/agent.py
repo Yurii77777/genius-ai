@@ -41,6 +41,20 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+
+def user_path():
+    """Background jobs (the watcher, the review loop, launchd) start with a bare PATH: no nvm, no Homebrew.
+    Add the user's usual program folders, so a provider that is installed (codex under nvm) is found."""
+    import glob
+    home = os.path.expanduser("~")
+    extra = sorted(glob.glob(os.path.join(home, ".nvm/versions/node/*/bin")), reverse=True) + [
+        "/opt/homebrew/bin", "/usr/local/bin", os.path.join(home, ".local/bin"), os.path.join(home, ".bun/bin")]
+    have = os.environ.get("PATH", "").split(os.pathsep)
+    os.environ["PATH"] = os.pathsep.join(have + [d for d in extra if os.path.isdir(d) and d not in have])
+
+
+user_path()
 OLLAMA = os.environ.get("OLLAMA_HOST_URL", "http://127.0.0.1:11434")
 FAST = "deepseek-v4.1-flash:cloud"
 PRO = "deepseek-v4-pro:cloud"
