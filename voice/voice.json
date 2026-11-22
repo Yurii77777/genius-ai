@@ -23,7 +23,7 @@
     }
   },
   "pace": {
-    "comment": "inside one project: normal speech, a tiny pause between sentences; a new project («Сайт: …», «Чіка: …») is announced by a soft sound and a short pause",
+    "comment": "inside one project: normal speech, a tiny pause between sentences; a new project («Сайт: …», «Демо: …») is announced by a soft sound and a short pause",
     "sentence_pause": 0.1,
     "topic_pause": 0.35,
     "topic_sound": "/System/Library/Sounds/Tink.aiff"

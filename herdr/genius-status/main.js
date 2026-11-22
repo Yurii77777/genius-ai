@@ -69,10 +69,14 @@ const WORDS = {
         quiet: "screen unchanged", you_tip: "waits for you", work_tip: "in work", parked_tip: "put aside" },
 };
 
+// genius-ai's own group (bin/status "self": true, tag ⚙️ GA; the user's decision of 2026-11-18): Attention
+// draws it like a project; the Projects shelf and its counter leave it out (no git, no space, no pause).
+const projectStates = (states) => states.filter((s) => !s.self);
+
 const hhmm = (ms) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
 const inside = (dir, path) => Boolean(dir) && (dir === path || dir.startsWith(path + "/"));
 const short = (name) => name.split(" · ").pop();
-const days = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : null; };                       // "🌐 LW · сайт" → "сайт"
+const days = (iso) => { const t = Date.parse(iso); return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : null; };                       // "🌐 EX · сайт" → "сайт"
 const openUrl = (url) => { if (url) exec("open", [url]); };
 const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const minutes = (sec) => (sec ? Math.max(0, Math.floor((Date.now() / 1000 - sec) / 60)) : null);
@@ -365,9 +369,7 @@ export default class GeniusStatus extends View {
       // structured problem (bin/status `problem_data`): a PR conflict has the «resolve» button; «resolving…» while its operation prfix-<N> exists
       data: s.problem_data?.[i] ?? null,
       busy: (s.problem_data?.[i]?.kind === "pr_conflict" && (s.ops_detail ?? []).some((o) => o.id === `prfix-${s.problem_data[i].number}`)) || undefined })));
-    // Every task, not only the waits (the user's decision of 2026-11-15: «тут мали б бути всі задачі
-    // коректно відсортовані»): 👤 waits for the user, then 🔄 in work, then 📋 next tasks ("queue":
-    // "next"); inside a group by the project's rank. Paused operations stay out.
+    // Only what waits for the user: 👤 (and ⚡ a restart cut), by the project's rank. Paused stay out.
     const byRank = [...live].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
     const pick = (test, kind) => byRank.flatMap((s) => (s.ops_detail ?? []).filter((o) => !o.paused && test(o))
       .map((o) => ({ id: `${s.name}-${o.id}`, tag: s.tag, op: o, kind })));
@@ -375,8 +377,8 @@ export default class GeniusStatus extends View {
     const waits = [
       ...pick((o) => o.needs_user && cut(o), "cut"),                    // a restart stopped the agent: first
       ...pick((o) => o.needs_user && !cut(o), "you"),
-      ...pick((o) => !o.needs_user && o.queue !== "next", "work"),
-      ...pick((o) => !o.needs_user && o.queue === "next", "next"),
+      // In work and next tasks are not shown here (the user's decision of 2026-11-18: «якщо просто черга
+      // і вона У РОБОТІ і НЕ ЧЕКАЄ мене — не логічно це тут показувати»). They stay on the project cards.
     ];
     return { problems, waits };
   }
@@ -389,7 +391,7 @@ export default class GeniusStatus extends View {
     const rank = { blocked: 0, done: 1 };
     return everyAgent().filter((a) => a.status === "blocked" || a.status === "done")
       .sort((a, b) => rank[a.status] - rank[b.status] || b.seq - a.seq)
-      .map((a) => ({ agent: a, tag: states.find((s) => inside(a.cwd, s.path))?.tag ?? a.where }));
+      .map((a) => ({ agent: a, tag: projectStates(states).find((s) => inside(a.cwd, s.path))?.tag ?? a.where }));
   }
 
   requests(t, w, rows) {
@@ -613,19 +615,19 @@ export default class GeniusStatus extends View {
     const rows = this.attentionRows(states);
     const asks = this.section === "requests" ? this.requestRows(states) : [];
     const fx = ((shared(EXTRA) ?? {}).focus ?? {});
-    const count = this.section === "done" ? (fx.done_today ?? []).length + (fx.date === today() ? (fx.steps ?? []).filter((st) => st.done).length : 0)
+    const count = this.section === "done" ? (fx.done_count ?? (fx.done_today ?? []).length) + (fx.date === today() ? (fx.steps ?? []).filter((st) => st.done).length : 0)
       : this.section === "models" ? ((shared(MODELS) ?? {}).providers ?? []).length
       : this.section === "requests" ? asks.length
       : this.section === "attention" ? rows.problems.length + rows.waits.length
       : this.section === "ops" ? states.reduce((n, s) => n + (s.paused ? 0 : (s.ops_detail ?? []).length), 0)
-      : states.filter((s) => !s.paused).length;                    // paused projects are not counted
+      : projectStates(states).filter((s) => !s.paused).length;                    // paused projects are not counted
     const body = this.root === null ? [div().px(12).py(8).text_size(12).text_color(t.blocked).child(w.noroot)]
       : this.section === "done" ? this.doneRows(t)
       : this.section === "models" ? this.modelRows(t)
       : this.section === "requests" ? this.requests(t, w, asks)
       : this.section === "attention" ? this.attention(t, w, rows)
       : this.section === "ops" ? this.ops(t, w, states)
-      : this.projects(t, w, states);
+      : this.projects(t, w, projectStates(states));
     const side = ["requests", "models", "done"].includes(this.section);
     return v_flex().size_full().when(!side, (el) => el.rounded(10)).bg(t.chrome)
       .when(side, (el) => el.border_t(1).border_color(t.border))

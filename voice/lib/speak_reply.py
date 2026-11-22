@@ -99,8 +99,10 @@ def main():
     if off or hook.get("stop_hook_active"):
         return
     reply = last_reply(hook)
-    # The reply's own spoken gist: a line starting with 🔊 (the user wants the dry essence in
-    # plain words, never the whole reply). Without one, only the first sentence is spoken.
+    # The reply's own spoken line: a line starting with 🔊. It speaks in the manner of the reply — in a
+    # conversation the reply's own opening words, its joke included; dry only in a report (AGENTS.md
+    # «Spoken replies», the user's decision of 2026-11-22). Never the whole reply. Without the line,
+    # only the first sentence is spoken.
     gist = re.findall(r"(?m)^\s*🔊\s*(.+?)\s*$", reply)
     if gist:
         text = listenable(gist[-1])

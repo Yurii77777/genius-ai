@@ -1,0 +1,59 @@
+#!/bin/zsh
+# console/bin/console — the console app (console/app.swift → console/build/GeniusConsole).
+#   build    compile the app with swiftc (Xcode Command Line Tools); only when the source is newer
+#   start [--root <genius-ai folder>]
+#            build if needed, start the app hidden (⌥Space or its menu-bar item shows it); it reuses
+#            the bridge on :4419 or starts its own. Default root: the genius-ai folder holding console/
+#   stop     quit the app (it stops the bridge only when it started it)
+#   status   the app, its window, the bridge and the hotkey
+# Everything stays in console/: build/ for the binary, run/ for logs, the window frame, storage.
+emulate -L zsh
+console=${0:A:h:h}
+root=${console:h}
+[[ $2 == --root && -n $3 ]] && root=${3:A}
+build=$console/build run=$console/run app=$console/build/GeniusConsole port=4419
+mkdir -p $build $run
+
+app_pid() {
+  local p
+  p=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pid"])' $run/app.json 2>/dev/null) || return 1
+  [[ -n $p ]] && kill -0 $p 2>/dev/null && ps -p $p -o comm= | grep -q GeniusConsole && echo $p
+}
+bridge_up() { curl -s -o /dev/null --max-time 2 -H "Host: 127.0.0.1:$port" "http://127.0.0.1:$port/api/state"; }
+
+do_build() {
+  command -v swiftc >/dev/null || { echo "❌ swiftc missing: install the Xcode Command Line Tools (xcode-select --install)"; return 1; }
+  if [[ ! -x $app || $console/app.swift -nt $app ]]; then
+    echo "🔨 building console/build/GeniusConsole"
+    swiftc -O -o $app.tmp $console/app.swift -framework WebKit -framework Carbon || return 1
+    mv -f $app.tmp $app
+  fi
+}
+
+case ${1:-status} in
+  build) do_build ;;
+  start)
+    if p=$(app_pid); then echo "✅ already running (pid $p)"; exit 0; fi
+    do_build || exit 1
+    nohup $app --root $root >>$run/app.log 2>&1 </dev/null &!
+    for i in {1..40}; do sleep 0.25; app_pid >/dev/null && break; done
+    if p=$(app_pid); then echo "✅ started hidden (pid $p) · root $root · ⌥Space or the menu-bar crosshair shows it · log console/run/app.log"
+    else echo "⛔ did not start: see console/run/app.log"; exit 1; fi ;;
+  stop)
+    if p=$(app_pid); then
+      kill -TERM $p
+      for i in {1..40}; do kill -0 $p 2>/dev/null || break; sleep 0.1; done
+      kill -0 $p 2>/dev/null && { echo "⛔ pid $p did not quit"; exit 1; }
+      echo "✅ stopped"
+    else echo "not running"; fi ;;
+  status)
+    if p=$(app_pid); then
+      /usr/bin/python3 -c '
+import json, sys
+s = json.load(open(sys.argv[1]))
+own = "started by the app (pid %s)" % s["bridge_pid"] if s["bridge_owned"] else "reused (left running on quit)"
+print("✅ app pid %s · window %s · hotkey %s · bridge %s" % (s["pid"], s["window"], s["hotkey"], own))' $run/app.json
+    else echo "app: not running"; fi
+    if bridge_up; then echo "bridge: answers on 127.0.0.1:$port"; else echo "bridge: nothing on 127.0.0.1:$port"; fi ;;
+  *) echo "usage: console/bin/console build|start|stop|status"; exit 2 ;;
+esac

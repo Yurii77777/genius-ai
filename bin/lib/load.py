@@ -21,7 +21,8 @@ in genius.config.json. Inside a window no stack starts and the heavy queue holds
 asks agents with a running dev server to stop it when the window begins.
 
 A command starts a stack when it starts containers, a dev server, a browser test run or a local build server
-(STACK_START). The guard says no when: local model work runs; or free memory is below MIN_FREE_GB; or the mode
+(STACK_START). The guard says no when: local model work runs and less than ML_SIDE_FREE_GB
+(10 GB) is free (the user's word of 2026-11-22: «память 10Гіг»); or free memory is below MIN_FREE_GB; or the mode
 is one-stack and a stack already runs. It never stops anything: it says what runs and what to stop.
 bin/heavy waits while local model work runs (the heavy queue respects it too).
 """
@@ -36,6 +37,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__
 MODE = os.path.join(ROOT, "state", "load.json")
 ML_MIN_GB = 1.5
 MIN_FREE_GB = 4.0
+ML_SIDE_FREE_GB = 10.0   # the user's word of 2026-11-22: model work runs and 10 GB are free → a stack may start
 ML_PATTERNS = [r"\bmflux\b", r"mflux-generate", r"\bmlx_lm\b", r"mlx-lm", r"\bmlx_vlm\b", r"mlx_vlm_server",
                r"ai-toolkit/(run|toolkit)", r"\btrain(_network|_lora)?\.py\b", r"\bdiffusers\b", r"\btorchrun\b",
                r"\bollama (runner|llama)", r"\bcomfyui\b", r"\bllama-server\b", r"\bwhisper\b.*--model"]
@@ -108,6 +110,8 @@ def quiet_now():
             now = datetime.now(ZoneInfo(q.get("tz") or "Europe/Kyiv"))
         except Exception:
             now = datetime.now()
+        if q.get("off_until") and now.strftime("%Y-%m-%d") < q["off_until"]:
+            continue                        # the user lifted the window up to this date (e.g. a day off)
         days = q.get("days", "mon-sun")
         if "-" in days:
             a, b = days.split("-")
@@ -133,11 +137,12 @@ def verdict(cmd):
         return (f"quiet window «{why}» until {until} (the user's meeting: the computer must stay light). "
                 "Start nothing heavy now; wait until it ends, or prepare the work without running it")
     jobs = ml_jobs()
-    if jobs:
+    free = free_gb()
+    if jobs and (free is None or free < ML_SIDE_FREE_GB):
         return ("local model work runs (" + "; ".join(f"pid {p}, {g} GB: {c}" for p, g, c in jobs[:3]) +
                 "). The user's rule: no local stack while training or generation runs locally. Wait for it to end, "
-                "or report this as a blocker; do not stop the user's model work")
-    free = free_gb()
+                "or report this as a blocker; do not stop the user's model work"
+                f" (a stack may start next to it when at least {ML_SIDE_FREE_GB:g} GB are free; now {free} GB)")
     if free is not None and free < MIN_FREE_GB:
         return f"only {free} GB of memory is free (at least {MIN_FREE_GB} needed). Stop what is unused first: {', '.join(stacks()[:6]) or 'nothing of ours runs'}"
     mode = read(MODE, {})

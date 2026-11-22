@@ -199,6 +199,19 @@ def add(text, project, kind, source):
     print(("added" if n else "already there") + (" (no vector: the local model did not answer)" if bare else ""))
 
 
+def add_later(text, project, kind="decision", source=""):
+    """Store one record in the background: a caller that must not wait (a panel button, the watcher).
+    The record is embedded with the local model, which takes a second or two: never a button's problem."""
+    args = [sys.executable, os.path.realpath(__file__), "add", text, "--kind", kind, "--source", source]
+    if project:
+        args += ["--project", project]
+    try:
+        subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        pass
+
+
 def from_log(path):
     """The user's own words of one day, each with what it answered and what came of it."""
     recs, rows = [], []

@@ -112,20 +112,35 @@ STEPS = {"START": 1, "VOICE": 2, "DICTATION": 2, "TEXT": 3, "TONE": 3, "PROJECTS
 OPERATIONS = ROOT / "state" / "operations.json"
 
 
-def pending_operations() -> str:
-    """Long operations that an earlier session started and did not finish (AGENTS.md «Pending operations»)."""
+def pending_operations(path: Path | str | None = None) -> str:
+    """Long operations that an earlier session started and did not finish (AGENTS.md «Pending operations»).
+
+    Every operation that waits for the user (`"needs": "user"`) comes first, with its question and the
+    choices the panel offers: it is the one thing the session cannot go past in silence."""
+    path = Path(path or OPERATIONS)
     try:
-        ops = json.loads(OPERATIONS.read_text() or "[]")
+        ops = json.loads(path.read_text() or "[]")
     except (OSError, json.JSONDecodeError):
         return ""
     if not ops:
         return ""
+    def order(op: dict) -> tuple:
+        return (not (op.get("needs") == "user" and not op.get("paused")), op.get("project", ""))
     lines = ["[genius-ai] PENDING OPERATIONS from earlier sessions. Report them FIRST, check each one's "
-             "current state with its `check`, then continue or close it (AGENTS.md «Pending operations»):"]
-    for op in ops:
-        lines.append(f"- [{op.get('project', '?')}] {op.get('what', '?')} — waiting for: "
-                     f"{op.get('waiting_for', '?')}; check: `{op.get('check', '')}`; next: {op.get('next', '?')}; "
-                     f"started {op.get('started', '?')}")
+             "current state with its `check`, then continue or close it (AGENTS.md «Pending operations»). "
+             "👤 marks an operation that waits for the user: put its question to the user in this reply."]
+    for op in sorted(ops, key=order):
+        mark = "👤 " if op.get("needs") == "user" and not op.get("paused") else ""
+        line = (f"- {mark}[{op.get('project', '?')}] {op.get('what', '?')} — waiting for: "
+                f"{op.get('waiting_for', '?')}; check: `{op.get('check', '')}`; next: {op.get('next', '?')}; "
+                f"started {op.get('started', '?')}")
+        if op.get("ask"):
+            line += f"; question: «{op['ask']}»"
+        if op.get("answers"):
+            line += f" ({' / '.join(op['answers'])})"
+        if op.get("paused"):
+            line += "; paused by the user"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -182,6 +197,29 @@ COPIED = (
 )
 
 
+def hook_input() -> dict:
+    """The hook's own input (session_id, cwd). An empty dict when a person runs the script by hand."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return {}
+        raw = sys.stdin.read()
+        return json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return {}
+
+
+def shelf_context(session: str = "") -> str:
+    """The coordinator's shelf (bin/lib/shelf.py, AGENTS.md «Live control»): what a long session forgets —
+    a step after the deploy, an approved decision with no PR, a branch outside every PR. A script builds
+    it; this session gets it as seen, so the first prompt does not say it again."""
+    try:
+        sys.path.insert(0, str(ROOT / "bin" / "lib"))
+        import shelf
+        return shelf.build(refresh=True, quiet=True, seen=session)
+    except Exception:
+        return ""
+
+
 def install_check(cfg: dict) -> str | None:
     """None = go on; else the context that replaces everything (AGENTS.md «Fresh start or continue»)."""
     sys.path.insert(0, str(ROOT / "bin" / "lib"))
@@ -200,7 +238,34 @@ def install_check(cfg: dict) -> str | None:
                          made_path=made.get("path", "?"), made_host=made.get("host", "?"))
 
 
+def selftest() -> None:
+    """An operation that waits for the user is listed first, with its question and its choices."""
+    import tempfile
+
+    ops = [{"id": "a", "project": "lw", "what": "CI check", "waiting_for": "CI", "check": "gh run list"},
+           {"id": "b", "project": "demo", "what": "publish", "waiting_for": "the user's word",
+            "needs": "user", "ask": "Публікувати сайт?", "answers": ["yes", "later"]},
+           {"id": "c", "project": "lw", "what": "merge", "needs": "user", "ask": "Мерджити?",
+            "paused": {"since": "2026-11-19"}}]
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "operations.json"
+        assert pending_operations(path) == "", "no file: nothing to report"
+        path.write_text("[]")
+        assert pending_operations(path) == "", "an empty list: nothing to report"
+        path.write_text(json.dumps(ops, ensure_ascii=False))
+        body = [l for l in pending_operations(path).splitlines() if l.startswith("- ")]
+        assert len(body) == 3, body
+        assert body[0].startswith("- 👤 [demo] publish"), body
+        assert "«Публікувати сайт?»" in body[0] and "yes / later" in body[0], body[0]
+        assert body[1].startswith("- [lw] CI check"), body
+        assert body[2].startswith("- [lw] merge") and "paused by the user" in body[2], body[2]
+    print("session_start selftest: ok")
+
+
 def main() -> None:
+    if "--selftest" in sys.argv:
+        selftest()
+        return
     cfg, error = load_config()
     copied = None if error else install_check(cfg)
     if copied:
@@ -292,9 +357,12 @@ def main() -> None:
         context = context + "\n" + live
 
     handoff = ROOT / "state" / "handoff.md"
+    shelf = shelf_context(hook_input().get("session_id", ""))
     if handoff.exists():                                # the summary the last session left (AGENTS.md)
         context = ("[genius-ai] HANDOFF from the last session (state/handoff.md) — start from it:\n"
-                   + handoff.read_text()[:4000] + "\n" + context)
+                   + handoff.read_text()[:4000] + ("\n" + shelf if shelf else "") + "\n" + context)
+    elif shelf:                                         # no handoff: the shelf is the first thing read
+        context = shelf + "\n" + context
 
     ops = pending_operations()
     if ops:

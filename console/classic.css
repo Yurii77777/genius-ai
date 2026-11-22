@@ -1,0 +1,66 @@
+/* Classic skin: the Herdr panel's look (theme «graphite», sampled from the app) as plain HTML. */
+#classic {
+  --chrome: #101114; --surface: #17191d; --canvas: #131518; --raised: #2c2e31; --hover: #222428; --selected: #262629;
+  --border: #23252a; --fg: #eeeeef; --muted: #98999b; --dim: #6b6c6f; --accent: #96b2d7;
+  --working: #e5c07b; --blocked: #f0705f; --done: #76a8ff; --idle: #6b6c6f; --unknown: #6b6c6f;
+  font: 12.5px/1.35 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  color: var(--fg); background: var(--canvas); min-height: 100vh; box-sizing: border-box;
+  padding: 40px 12px 12px; -webkit-font-smoothing: antialiased;
+}
+#classic * { box-sizing: border-box; }
+#classic .grid { display: grid; grid-template-columns: 280px minmax(0, 1fr) minmax(0, 1fr); gap: 12px; height: calc(100vh - 52px); }
+#classic .col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+#classic .side { background: var(--chrome); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+#classic .side .shelf { border-radius: 0; border-top: 1px solid var(--border); }
+#classic .side .shelf:first-child { border-top: 0; }
+#classic .shelf { background: var(--chrome); border-radius: 10px; display: flex; flex-direction: column; min-height: 0; }
+#classic .col > .shelf { flex: 1; }
+#classic .side .shelf.grow { flex: 1; }
+#classic .head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex: none; }
+#classic .head .bar { width: 3px; height: 14px; border-radius: 2px; }
+#classic .head .title { font-size: 11.5px; font-weight: 600; }
+#classic .head .count { padding: 0 6px; border-radius: 8px; background: var(--raised); font-size: 11px; }
+#classic .head .sp { flex: 1; }
+#classic .head .when { font-size: 11px; color: var(--dim); }
+#classic .body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0; }
+#classic .body::-webkit-scrollbar { width: 6px; } #classic .body::-webkit-scrollbar-thumb { background: var(--raised); border-radius: 3px; }
+#classic .row { padding: 5px 12px; display: flex; gap: 8px; align-items: baseline; }
+#classic .clickable { cursor: pointer; } #classic .clickable:hover { background: var(--hover); }
+#classic .tag { flex: none; color: var(--fg); }
+#classic .grow1 { flex: 1; min-width: 0; }
+#classic .trunc { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#classic .muted { color: var(--muted); } #classic .dim { color: var(--dim); } #classic .red { color: var(--blocked); }
+#classic .amber { color: var(--working); } #classic .blue { color: var(--done); } #classic .acc { color: var(--accent); }
+#classic .small { font-size: 11.5px; } #classic .tiny { font-size: 11px; }
+#classic .block { padding: 7px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 3px; }
+#classic .wait { padding: 5px 12px; display: flex; flex-direction: column; gap: 2px; cursor: pointer; }
+#classic .wait.mine { padding: 7px 12px; gap: 4px; }
+#classic .wait:hover { background: var(--hover); }
+#classic .btns { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 1px; }
+#classic .btn { flex: none; padding: 2px 8px; border-radius: 6px; background: var(--raised); font-size: 11.5px; color: var(--fg); cursor: pointer; border: 0; font-family: inherit; }
+#classic .btn:hover { background: var(--hover); color: var(--fg); }
+#classic .btn.dimmed { color: var(--dim); }
+#classic .btn[disabled] { opacity: .45; cursor: not-allowed; }
+#classic .icon { flex: none; padding: 0 4px; border-radius: 4px; cursor: pointer; color: var(--dim); }
+#classic .icon:hover { background: var(--raised); color: var(--fg); }
+#classic .dot { flex: none; width: 7px; height: 7px; border-radius: 4px; display: inline-block; }
+#classic .card { margin: 3px 8px; padding: 7px 10px; border-radius: 6px; background: var(--surface); display: flex; flex-direction: column; gap: 4px; }
+#classic .card.paused { opacity: .4; }
+#classic .card .top { display: flex; gap: 8px; align-items: center; }
+#classic .card .name { font-size: 13px; font-weight: 600; }
+#classic .pill { padding: 0 6px; border-radius: 8px; font-size: 10.5px; background: var(--raised); white-space: nowrap; }
+#classic .chips { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 11.5px; color: var(--muted); }
+#classic .chips a { color: inherit; text-decoration: none; } #classic .chips a:hover { color: var(--accent); }
+#classic .agent { display: flex; gap: 5px; align-items: center; cursor: pointer; font-size: 11.5px; }
+#classic .model { flex: none; padding: 0 5px; border-radius: 6px; background: var(--raised); font-size: 10.5px; color: var(--accent); }
+#classic .counters { display: flex; gap: 10px; font-size: 11.5px; }
+#classic .err { padding: 4px 12px; font-size: 11px; color: var(--blocked); }
+#classic .toast { position: fixed; right: 16px; bottom: 16px; z-index: 40; background: var(--surface); border: 1px solid var(--raised); border-left: 3px solid var(--done);
+  border-radius: 8px; padding: 8px 12px; max-width: 380px; font-size: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
+#classic .toast.bad { border-left-color: var(--blocked); }
+#classic .send { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); flex: none; }
+#classic .send input { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--raised); border-radius: 6px; color: var(--fg); padding: 4px 8px; font: inherit; }
+#classic .send input:focus { outline: 1px solid var(--accent); }
+#classic .reply { padding: 6px 12px 8px; font-size: 11.5px; color: var(--muted); white-space: pre-wrap; max-height: 160px; overflow-y: auto; border-top: 1px solid var(--border); }
+@media (max-width: 1100px) { #classic .grid { grid-template-columns: 260px minmax(0, 1fr); } #classic .grid > .col:last-child { grid-column: 1 / -1; } #classic .grid { height: auto; } #classic .col > .shelf { max-height: 80vh; } }
+@media (max-width: 700px) { #classic { padding: 40px 16px 16px; } #classic .grid { grid-template-columns: minmax(0, 1fr); } #classic .side { max-height: none; } }

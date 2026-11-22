@@ -37,7 +37,50 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+
+def user_path():
+    """Background jobs (the watcher, the review loop, launchd) start with a bare PATH: no nvm, no Homebrew.
+    Add the user's usual program folders, so a provider that is installed (codex under nvm) is found."""
+    import glob
+    home = os.path.expanduser("~")
+    extra = sorted(glob.glob(os.path.join(home, ".nvm/versions/node/*/bin")), reverse=True) + [
+        "/opt/homebrew/bin", "/usr/local/bin", os.path.join(home, ".local/bin"), os.path.join(home, ".bun/bin")]
+    have = os.environ.get("PATH", "").split(os.pathsep)
+    os.environ["PATH"] = os.pathsep.join(have + [d for d in extra if os.path.isdir(d) and d not in have])
+
+
+user_path()
 OLLAMA = os.environ.get("OLLAMA_HOST_URL", "http://127.0.0.1:11434")
+OLLAMA_CLOUD = "https://ollama.com"
+
+
+def ollama_env_file():
+    try:
+        with open(os.path.join(ROOT, "genius.config.json"), encoding="utf-8") as f:
+            return os.path.expanduser(json.load(f).get("env_file") or "~/.claude/.env")
+    except (OSError, ValueError):
+        return os.path.expanduser("~/.claude/.env")
+
+
+def ollama_key():
+    if os.environ.get("OLLAMA_API_KEY"):
+        return os.environ["OLLAMA_API_KEY"]
+    try:
+        with open(ollama_env_file(), encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"\s*(?:export\s+)?OLLAMA_API_KEY\s*=\s*(.+)", line)
+                if m:
+                    return m.group(1).strip().strip("\"'")
+    except OSError:
+        pass
+    return None
+
+
+def ollama_cloud():
+    """True when agents talk to the Ollama cloud with the user's key: no local sign-in, no local daemon
+    (the owner's decision of 2026-11-22). OLLAMA_HOST_URL set by hand keeps the local or a custom Ollama."""
+    return not os.environ.get("OLLAMA_HOST_URL") and bool(ollama_key())
 FAST = "deepseek-v4.1-flash:cloud"
 PRO = "deepseek-v4-pro:cloud"
 # One main model and two fallbacks per role (the user's decision of 2026-11-17). A link is a provider and,
@@ -65,6 +108,10 @@ DEFAULT_ROLES = {
                      "about": "the last review before the user's word to merge: Claude only"},
     "look":         {"chain": [{"provider": "codex"}, {"provider": "claude"}],
                      "about": "see and judge an image: screenshots, mock-ups, design review (no Ollama model sees images)"},
+    # The critic of every brief (bin/lib/critic.py, the owner's rule of 2026-11-20: a brief is judged by another
+    # provider than the one that wrote it — here Claude, the coordinator). Never Claude: it would prove nothing.
+    "critic":       {"chain": [{"provider": "codex"}, O("kimi-k3.1-pro:cloud"), O(FAST)],
+                     "about": "the critic of a brief before an agent starts: another provider than the author"},
     # Drawing an image. Claude cannot draw. A local image model is the LAST link, for when Codex has no limits
     # left (the user's decision of 2026-11-17): it is heavy for the computer, so it has a guard. Add it in the
     # config, the product does not know your local model:
@@ -100,7 +147,11 @@ def answers(link):
     """The Ollama model answers one tiny request (its account, its quota, its servers)."""
     body = json.dumps({"model": link["model"], "stream": False, "messages": [{"role": "user", "content": "ok"}],
                        "options": {"num_predict": 1}}).encode()
-    req = urllib.request.Request(OLLAMA + "/api/chat", data=body, headers={"content-type": "application/json"})
+    headers = {"content-type": "application/json"}
+    base = OLLAMA
+    if ollama_cloud():
+        base, headers["Authorization"] = OLLAMA_CLOUD, f"Bearer {ollama_key()}"
+    req = urllib.request.Request(base + "/api/chat", data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=40) as r:
             return not json.load(r).get("error")
@@ -193,6 +244,10 @@ def pick(role_name, project):
     # Nothing in the chain can work (not installed, no subscription, not allowed for this project): Claude Code
     # itself is the one provider every install has, so the work is never refused — the note says why.
     # A working role on Claude takes the cheaper Claude model: the coordinator's own model is for judgement.
+    if not (allowed and "claude" in allowed) and not read(os.path.join(ROOT, "genius.config.json"), {}).get("claude_fallback", True):
+        # the owner's choice (config «claude_fallback»: false): Claude is the coordinator, never a stand-in
+        # for a cheap model; a role with no live model starts nothing and says why
+        sys.exit(f"no model of «{role_name}» can work now (Claude fallback is off): " + "; ".join(notes))
     cheap = {} if role_name in ("review", "final-review", "image") else {"model": "sonnet"}
     notes.append(f"no model of «{role_name}» can work now: claude" + (" (sonnet)" if cheap else ""))
     return {"provider": "claude", **cheap}, notes
@@ -236,6 +291,8 @@ def installed(provider):
 
 
 def ensure_ollama():
+    if ollama_cloud():
+        return
     try:
         urllib.request.urlopen(OLLAMA + "/api/version", timeout=2).read()
     except OSError:
@@ -282,25 +339,47 @@ def gate_settings():
     return path
 
 
-def command(spec, brief):
+def command(spec, brief, folder=None):
     if spec["provider"] == "ollama":
         model = spec.get("model", PRO)
-        env = {"ANTHROPIC_BASE_URL": OLLAMA, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_MODEL": model,
+        env = {"ANTHROPIC_BASE_URL": OLLAMA_CLOUD if ollama_cloud() else OLLAMA, "ANTHROPIC_MODEL": model,
                "ANTHROPIC_DEFAULT_OPUS_MODEL": model, "ANTHROPIC_DEFAULT_SONNET_MODEL": FAST,
                "ANTHROPIC_DEFAULT_HAIKU_MODEL": FAST, "CLAUDE_CODE_SUBAGENT_MODEL": FAST,
                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false"}
         exports = " ".join(f"{k}={v}" for k, v in env.items())
+        # the key comes from the env file inside the agent's own shell: it never appears on a command line
+        token = (f'set -a; . {ollama_env_file()}; set +a; ANTHROPIC_AUTH_TOKEN="$OLLAMA_API_KEY"'
+                 if ollama_cloud() else "ANTHROPIC_AUTH_TOKEN=ollama")
         # «auto» mode cannot work through Ollama (its safety check runs on Anthropic's servers): the agent runs in
-        # «default» mode, and the gate (bin/lib/gate.py, a PreToolUse hook) answers every action, so no prompt waits
-        return model, ["zsh", "-lic", f'unset ANTHROPIC_API_KEY; {exports} GENIUS_AGENT=1 exec claude '
-                       f'--permission-mode default --settings "{gate_settings()}" "$0"', brief]
+        # «default» mode, and the gate (bin/lib/gate.py, a PreToolUse hook) answers by rule; an action no rule
+        # covers waits for the coordinator, and the watcher brings it there (never the user's own prompt)
+        return model, ["zsh", "-lic", f'unset ANTHROPIC_API_KEY; {token} {exports} GENIUS_AGENT=1 GENIUS_AUTHOR=ollama '
+                                      f'SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 exec claude '
+                                       f'--permission-mode default --settings "{gate_settings()}" "$0"', brief]
     if spec["provider"] == "codex":
         model = spec.get("model", "")
         flag = f'-m {model} ' if model else ""
-        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 exec codex {flag}"$0"', brief]
+        # no approval prompts (owner 20.11: «я три рази відповідав агентам»): Codex writes only in its folder and in
+        # genius-ai's state (the heavy queue), may use the network, and is never asked
+        box = (f'-s workspace-write -a never -c sandbox_workspace_write.network_access=true '
+               f'--add-dir "{os.path.join(ROOT, "state")}" '
+               f'--add-dir "{os.path.expanduser("~/.codex")}" ')  # run-render.sh starts a nested codex: it needs its home
+        # a git worktree keeps its index and merge state in the main repo's .git (owner 21.11: Codex could not
+        # commit or merge in a worktree): let it write there too
+        if folder:
+            try:
+                gd = subprocess.run(["git", "-C", folder, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                    capture_output=True, text=True, timeout=10).stdout.strip()
+                if gd and os.path.isdir(gd):
+                    box += f'--add-dir "{gd}" '
+            except Exception:
+                pass
+        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 GENIUS_AUTHOR=codex exec codex {box}{flag}"$0"', brief]
     model = spec.get("model", "")
     flag = f"--model {model} " if model else ""
-    return model or "claude", ["zsh", "-lic", f'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false GENIUS_AGENT=1 exec claude {flag}"$0"', brief]
+    return model or "claude", ["zsh", "-lic", f'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false GENIUS_AGENT=1 '
+                                              f'GENIUS_AUTHOR=claude SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 '
+                                              f'exec claude {flag}"$0"', brief]
 
 
 def show_roles():
@@ -329,7 +408,36 @@ def main():
         sys.exit(f"bad name «{name}»: 1-32 of a-z 0-9 - _")
     if not os.path.isdir(folder):
         sys.exit(f"no folder {folder}")
-    spec, notes = pick(role_name, project_of(folder))
+    project = project_of(folder)
+    spec, notes = pick(role_name, project)
+    # The context of every brief (the owner's goal of 2026-11-20): the owner's rules from the knowledge base and the
+    # project's skills, before «Critic notes». It comes from the script, so no provider and no brief misses it; the
+    # evidence is the critic's own, so one search of the knowledge base serves both.
+    import briefctx
+    import critic
+    base = brief
+    try:
+        ev = critic.evidence(base, folder, project.get("name", ""))
+    except Exception:
+        ev = {"rules": [], "code": []}
+    ctx = briefctx.context(base, folder, project.get("name", ""), role_name,
+                           rules_fn=lambda b, p, n: ev["rules"][:n])
+    if ctx["text"]:
+        brief = base + "\n\n" + ctx["text"]
+        notes.append(f"context: {ctx['rules']} owner rules · {ctx['skills']} skills")
+    else:
+        notes.append("context: no rule and no skill bears on this brief")
+    # The critic (the owner's rule of 2026-11-20): every brief is read by a model of ANOTHER provider before the
+    # agent starts, and its notes go into the brief. It never blocks the start: no answer within 180 s → no notes,
+    # and state/brief-critic.jsonl says why. There is no switch: a brief without the critic is not a brief.
+    critique = critic.notes_for(base, folder, project.get("name", ""), ev=ev,
+                                author=os.environ.get("GENIUS_AUTHOR") or "claude")
+    if critique["notes"]:
+        brief = brief + "\n\n" + critic.block(critique["notes"])
+        notes.append(f"critic: {critique['provider']} · {len(critique['notes'].splitlines())} lines · "
+                     f"{int(critique['ms'] / 1000)} s")
+    else:
+        notes.append(f"critic: no notes ({critique['why']})")
     if not shutil.which("hc"):
         # No Herdr: nothing to show the agent in. The coordinator runs it as an internal subagent instead;
         # this prints what the role resolved to, and the ending every brief must carry.
@@ -352,7 +460,7 @@ def main():
             print(f"note: {n}")
         print(f"started {name} · role {role_name} · local {spec.get('name', '')} through the heavy queue · output in {folder}")
         return
-    model, argv = command(spec, brief + "\n" + ending(spec, name))
+    model, argv = command(spec, brief + "\n" + ending(spec, name), folder)
     nosuggest = ["--label", "genius.nosuggest=1"] if spec["provider"] != "codex" else []
     # --no-notify: Herdr would type «blocked (permission)» into this session at once, before the watcher (30 s) has
     # had its turn to answer the dialog through the gate — noise for the user. The watcher reports what matters:

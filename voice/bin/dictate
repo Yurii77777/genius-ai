@@ -74,7 +74,7 @@ echo "🎙  Speak… (stops after ${pause} s of quiet)"
 sound Tink; note "🎙 Listening…"
 # astats prints the RMS of every 100 ms block to the log, live: short clicks barely move an RMS,
 # unlike silencedetect's per-sample peak, which every key press reset
-ffmpeg -loglevel info -nostdin -f avfoundation -i ":0" -t "$max_s" \
+ffmpeg -loglevel info -nostdin -f avfoundation -i ":default" -t "$max_s" \
   -af "asetnsamples=n=4800:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level" \
   -ar 16000 -ac 1 "$tmp/in.wav" 2>"$tmp/ff.log" &
 rec=$!

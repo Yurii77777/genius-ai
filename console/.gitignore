@@ -1,0 +1,3 @@
+# built and runtime files of the console app (console/bin/console build|start)
+build/
+run/

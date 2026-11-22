@@ -16,9 +16,9 @@ Claude Code, started in this folder, is the monitor.
 - **onboarding** — the dialog that fills an empty config.
 - **snapshot** — the status that the SessionStart hook injects at start.
 
-## Reply style: Simplified Technical English (ASD-STE100), every reply in this project
+## Reply style: Simplified Technical English (ASD-STE100) for reports only
 
-The user's decision of 2026-11-04; moved from the global ~/.claude/CLAUDE.md to this project on 2026-11-06. Write every reply by the STE rules, adapted to the reply's language:
+The user's decision of 2026-11-04; moved from the global ~/.claude/CLAUDE.md to this project on 2026-11-06. Since 2026-11-22 (the user: «STE лише для звітів») STE applies only to reports: release, deploy and PR reports, review verdicts, multi-project status. Ordinary conversation follows the user's chosen manner: the Claude Code output style (for example `~/.claude/output-styles/<name>.md`, chosen with `/output-style`) and `tone` in the config; it is live, short, and has no forced lists or tables. The project rules, gates and the 🔊 line stay the same in both. In a report, write by the STE rules, adapted to the reply's language:
 
 - A sentence has at most 20 words; a descriptive sentence at most 25.
 - One term, one meaning. Inside a project use its glossary terms; never mix synonyms for one thing.
@@ -92,6 +92,7 @@ The voice is on from the first reply (no extra command). Only choice 2 or `speak
    - Recommend `peer` (mark it «рекомендую»), unless the user's earlier words point to another one.
    - After the choice, show the three dials with the preset's `temperament` (гумор · прямота · деталі, 0–2) and ask once: «Підкрутити щось?». Free words go to `notes`.
    - Write `"tone": {"preset": "...", "humor": n, "directness": n, "detail": n, "notes": "..."}`. From this reply on, talk in that tone. The user can change it any time («зміни тон на …», «більше жартів», «коротше»).
+   - After the tone, offer once the Claude Code output style «Bratan» (`.claude/output-styles/bratan.md`): an optional 18+ manner with strong language, chosen with `/output-style` and never the default. Say what it adds and that it changes only the manner, never the rules, the gates or the 🔊 line. A «no» is final.
 4. **Projects.** Follow «After the first setup: connect projects» below: where to look, which projects; then study each project yourself.
 5. **Services.** Detect them yourself; do not ask the user to name them (the user's decision of 2026-11-06).
    - Check what is reachable: `gh auth status` (accounts) and the projects' remotes; Vercel CLI / MCP login; `doctl`; RunPod MCP; Docker/OrbStack.
@@ -151,10 +152,11 @@ Everything for the voice lives in `voice/`. Nothing is global: no `~/.local`, no
 ### Spoken replies
 
 The Stop hook (`voice/lib/speak_reply.py`) speaks only a line that starts with `🔊`.
-End every reply to the user with one such line: the dry essence in plain spoken words, in the user's language, one or two short sentences: what happened or what is needed from them.
+End every reply to the user with one such line, in the user's language, one or two short sentences: what happened or what is needed from them.
+The line speaks in the same manner as the reply (the user's decision of 2026-11-22: «в озвучку попадає суха витяжка, а не живий діалог»): in conversation it keeps the reply's own opening words, its joke included, and the user's output style and `tone`; it is dry only in a report.
 No file paths, code, numbers in tables, or markdown in it; it is heard, not read.
 Inside one project speak at the normal pace (Ukrainian speed 1.12), short and to the point. The user's decision of 2026-11-06: never slow speech down.
-With many projects: each project opens its own sentence with its spoken name («Сайт: …. Чіка: ….»). Before it the voice plays a soft sound and pauses briefly (`voice/voice.json` → `pace`). At most two short sentences per project.
+With many projects: each project opens its own sentence with its spoken name («Сайт: …. Демо: ….»). Before it the voice plays a soft sound and pauses briefly (`voice/voice.json` → `pace`). At most two short sentences per project.
 Without the line only the reply's first sentence is spoken.
 
 The PreToolUse hook (`voice/lib/work_status.py`) speaks what is happening while Claude works.
@@ -351,6 +353,7 @@ The user's decision of 2026-11-06: lead the user from A to Z. The user never has
 The user's decision of 2026-11-06: every project and service in the config is live. Keep all of them in mind, not only the one we talk about.
 
 - `bin/status` shows the live state of every project (git, PRs, running and failed workflows, URL checks, pending operations). `--line` gives one line per project.
+- Work outside a PR is a problem (the user's decision of 2026-11-20: work nobody sees is work nobody merges). A local branch is counted when its commits are not in `origin/<default>` even as a patch (`git cherry`) and no open PR has it as its head. A worktree is counted when it holds uncommitted files other than `next-env.d.ts`, `.doc-index`, `tmp/`, `node_modules`, `.brief.md`, `.brand-profile-source.png` and `.tmp-*`. The lines: «⚠️ N гілок поза PR: …» and «⚠️ незбережено у N робочих копіях: …»; `--json` carries the full list in `problem_data` (kinds `unpushed`, `worktree_dirty`). Integration branches (`develop`, `main`, `project.json` → `"integration"`) are never counted. One `gh pr list` per repo, cached 10 min. Self-check: `python3 -I bin/status --selftest`.
 - Open PRs (the user's decision of 2026-11-17: «мердж конфлікти! чому я це маю перевіряти»): a PR with a merge conflict (GitHub `mergeable` CONFLICTING / `mergeStateStatus` DIRTY) is a problem «⚔️ PR #N: конфлікт з <base>» of its project; a PR behind its base with no update for more than `stale_pr_days` (`project.json`, default 3) days is a note «застарів». One `gh pr list` per repo, cached 2 min; UNKNOWN is asked again once and then skipped. Self-check: `python3 -I bin/status --selftest`.
   - Resolve (the user's decision of 2026-11-17: «кнопочка в один клік… develop — голова»): the row has a «resolve» button in the Herdr panel, or run `bin/genius pr resolve <owner/repo> <N>` (`bin/lib/prfix.py`): a worktree `<project>/.claude/worktrees/prfix-<N>` of the PR's head, a `code` sub-agent (the project's provider limits apply) that merges `origin/<base>` into it with a merge commit — the base is the authority, the PR's own intent is re-applied on top, no test is dropped — runs the checks through `bin/heavy`, commits and does NOT push, and the operation `prfix-<N>`. The report is `state/agents/prfix-<repo>-<N>.md`; pushing (`git push origin HEAD:<head>`) stays the coordinator's step after the review. Self-check: `python3 -I bin/lib/prfix.py selftest`.
 - At the start of a session, and every 15 minutes while it is open, run `bin/status` and the `check` of each pending operation (a session cron job; it expires after 7 days — create it again).
@@ -365,15 +368,28 @@ The user's decision of 2026-11-06: every project and service in the config is li
   - «certificate is not the pinned one» is a problem: report it, never re-pin without the user.
 - GitHub outages: a failed run with «This run likely failed because of a workflow file issue», or many failed runs at once, can be GitHub itself. `bin/status` reads https://www.githubstatus.com (component «Actions»); during an outage it prints a «🐙 GitHub» line and marks failed runs «maybe GitHub, not the code». Report the incident; change no code for it; re-run after GitHub resolves it.
 
+## Coordinator shelf
+
+The user's decision of 2026-11-20 («полички і для тебе, а не лише на UI для мене»): the coordinator's state is a script, not the session's memory.
+
+- `bin/lib/shelf.py build` collects, per project: 🔴 broken on prod (card commands, URL checks), ⏭ after-deploy steps (from merged PRs, until an operation closes them), ✅ approved but not in code, 📤 branches outside a PR, ⏳ what waits on the coordinator.
+- The UserPromptSubmit hook injects «[coordinator shelf]» only when it changed; SessionStart injects it whole. Act on every line in the same reply: run the step, open the PR, or write the operation that tracks it.
+- Self-check: `python3 -I bin/lib/shelf.py selftest`.
+
 ## Focus of the day
 
 The user's decision of 2026-11-17: the user does not hold the plan of the day in the head; the panel shows it.
 
-- When the user names what we do today, or its order («first LW, then …»), write it: `bin/genius focus "<focus>" "<step 1>" "<step 2>"`. At most 5 steps, each a few words.
+- When the user names what we do today, or its order («first A, then …»), write it: `bin/genius focus "<focus>" "<step 1>" "<step 2>"`. At most 5 steps, each a few words.
 - Keep it true in the same reply that changes it: `focus now <n>` for the step in work, `focus done <n>` when it is finished, `focus step "<text>"` for a new one.
 - Write only what the user said or approved. Never invent steps.
 - The panel shows it on top of Attention, only on its own date. At the end of the day leave it; tomorrow's focus replaces it.
-- The «Done today» list fills itself with the project's merged PRs (`gh`, cached 5 min). Add other finished work by hand: `bin/genius done "<text>" [--project <name>]` (`state/done-<date>.jsonl`). Do it in the reply that finishes the work (an approved page, an activated version, a data package).
+- The «Done today» list fills itself with the project's merged PRs (`gh`, cached 5 min).
+- The Stop hook writes the other done items itself (`bin/lib/done_auto.py`). The user's decision of 2026-11-18: «не оновлюється статус виконаних задач знову» — the list is a mechanism, not a step that a reply can forget.
+- The hook reads the coordinator's final reply of the turn. A line with ✅ is finished work. So is a line with «злито», «опубліковано», «задеплоєно», «створено тікет» or «закрито» («merged», «published», «deployed», «created», «closed»).
+- Each item becomes one record in `state/done-<date>.jsonl` with source «auto». The project comes from the tag at the start of the line or of its block. The hook reads the tags from `projects/<name>/project.json`.
+- A line with no tag belongs to genius-ai. The hook leaves out questions, proposals, «не ще» lines and the 🔊 line. It leaves out a duplicate of the day, by text and by PR or ticket key. Self-check: `python3 -I bin/lib/done_auto.py selftest`.
+- `bin/genius done "<text>" [--project <name>]` stays. Use it for a correction, and for work that the reply does not name (an approved page, an activated version, a data package).
 - Work that is not in the focus and not urgent goes to the board (`"queue": "next"`), not into the user's attention.
 
 ## Log of the day and knowledge
@@ -392,6 +408,7 @@ The user's decision of 2026-11-17: every request of the user becomes knowledge; 
 - The log does not grow and no file has to be remembered (the user's decision of 2026-11-17). A live file `state/log/<date>.jsonl` holds only what is not digested yet. `bin/genius know digested <date>` ends a digest: it checks that the day's records exist, moves the file to `state/log/archive/<date>.jsonl.gz`, writes the ledger `state/log/index.json`, and drops archives older than 14 days. Words said later that day start a new live file. `bin/genius log status` shows every day; the end-of-day hook names the earlier days that still wait.
 - The day in numbers (the user's decision of 2026-11-17: to analyse the daily work and speed it up): `bin/genius day` counts the tasks closed per project, the tasks open and waiting for the user, the user's requests and button answers, the agents started per model, the gate's decisions and the models' usage, and saves them to `state/days/<date>.json`. The end-of-day hook runs it and puts the line into «[genius-ai end of day]»; tell the user the numbers with the handoff. `bin/genius day trend [n]` shows the last days side by side.
 - Use a «[genius-ai knowledge]» record instead of asking again, and name its source («log 2026-11-17 08:31»). The current message wins when they disagree. The records disagree with each other → ask.
+- An answer of the user to a question becomes a record of its own, kind `decision`, «question → answer» with the project: a button of the panel (`bin/genius ops answer`), and words the watcher sends to an agent that asked (`bin/lib/agent_ask.py`). The day log keeps the raw words (`know ingest` stores them as kind `answer`); this record names the pair and the project, so the next similar question is answered without the user.
 - `.claude/settings.json` of this folder runs the hooks only for sessions started here. `bin/genius know hooks on` adds them to the user's own `~/.claude/settings.json`: then every Claude Code session on this computer, in any project folder and every sub-agent, is logged and gets the knowledge. Ask the user first; `hooks off` removes them; a backup is kept. An agent that is not Claude Code has no hooks: the watcher searches for it (`bin/genius know search`).
 - The knowledge base never replaces the user's word for a merge, a write to prod, money, or lifting a hold.
 - Project rules and the memory stay as they are: a rule goes there too.
@@ -403,22 +420,43 @@ The user's decision of 2026-11-17: «ти і є оркестратором — �
 - The coordinator (Claude in this folder) plans, briefs, checks, and decides with the user. It does not write the code, google, or read long logs itself: it starts an agent for the role.
 - `bin/genius agent <role> <name> <folder> "<brief>"` picks the model by role; `bin/genius agent roles` shows the mapping. Each role has one main model and two fallbacks (the user's decision of 2026-11-17); the first that answers now is used (an Ollama model is probed with one tiny request; Claude and Codex give way at 95 % of a limit). Defaults: `code` DeepSeek v4.1 flash → GLM-5.3 → Kimi K2.7 code (not v4 pro: flash is stronger on agentic coding and about four times cheaper; the user's correction of 2026-11-17); `bulk` DeepSeek v4.1 flash → GLM-5.3 flash → MiMo v2.6 pro; `research` DeepSeek v4.1 flash → GLM-5.3 → Kimi K3; `watch` GLM-5.3 flash → DeepSeek v4.1 flash → MiMo v2.6 pro; `review` Codex → Claude → GLM-5.3; `final-review` Claude only; `look` (see and judge an image) Codex → Claude; `render` (draw an image) Codex, then a local image model from the config as the last resort. Claude cannot draw, and no Ollama model sees images. A `"provider": "local"` link is one command, not an agent: it runs through `bin/heavy` in its own Herdr terminal, and only when its guard passes (`needs_free_gb` of free memory, `no_docker`: no container runs). The guard stops nothing itself: it says what to stop. `"roles"` in the config replaces a role's `"chain"`.
 - The script adds the standard ending to every brief (ask, do not invent; the heavy queue; stop what you start; no push, merge or prod; the knowledge search; the report). Write the brief itself: the goal, the paths, the project rules to read, what «done» means.
+- Every brief also carries the context of the work, by script (`bin/lib/briefctx.py`; the user's goal of 2026-11-20: «головне щоб ці поперечники отримували знання із бази знань та скіли релевантні»). It stands before «Critic notes» and has two parts. «Owner's rules and decisions (from the knowledge base)»: at most 6 records that bear on the brief, one line each with its source. «Skills to read first»: at most 5 files of `<folder>/.claude/skills/*/SKILL.md` whose name, declared triggers («Тригери: …») or description name the brief's task, each an absolute path with a one-line why, then «read these before you start». The block is at most 25 lines. A rare word of the brief weighs more: «картинка» reaches the image skill, «бренд» does not reach every skill of the project. A Codex or Ollama agent has no Claude Code hooks, so this block is its only source of the user's words and of the project's skills: a start path that skips it is a bug. `bin/genius selfcheck` fails on such a path. `python3 -I bin/lib/briefctx.py selftest` checks the block on fixed briefs; `… show <folder> [<project>] [--role <role>] [--scores]` prints it for one brief.
+- Every brief passes the critic, by script (the user's rule of 2026-11-20: «кожен спавн агента фільтрується через суддю ІНШОГО провайдера»). `bin/lib/critic.py` reads the brief before the agent starts and appends «Critic notes (read first)» to it: (1) ALREADY EXISTS — code or a feature of our projects to reuse (`path:line`), from a ripgrep scan of the configured projects for the brief's key words; (2) HUMAN OUTPUT — what the result must look like to the person who reads it, when the brief is silent; (3) OWNER RULES — the user's earlier words from the knowledge base that apply and the brief does not mention. The critic is never Claude, because Claude writes the briefs here: the role `critic` (Codex → Ollama `kimi-k3.1-pro` → Ollama `deepseek-v4.1-flash`), the first that answers; the author's provider is always skipped. It never blocks a start: no answer within 180 s → the agent starts without notes and `state/brief-critic.jsonl` says why. Every critique is one line there: the project, who wrote the brief, which provider judged, the time. The paths that pass it: `bin/genius agent` (and so `ticket.py` and `prfix.py`), and the Agent (Task) tool of Claude Code through the PreToolUse hook in `.claude/settings.json`. `bin/genius selfcheck` (`bin/lib/selfcheck.py`) fails when any start path skips it; `python3 -I bin/lib/critic.py selftest` checks the critic itself on fixed briefs, without a model.
 - A project limits the providers its code may go to with `"providers": [...]` in its `project.json`; a role outside them runs on Claude. A provider with nearly spent limits gives way to its fallback. «Models» on the panel shows the limits.
 - Before the user's word to merge: the review agent's report, then a final review by Claude. The coordinator answers for the result.
 - Nothing here is required (the user's decision of 2026-11-17: the product must work for a user who lacks a provider). Claude Code is the only provider every install has. A link whose program is not installed (Ollama, Codex), is not signed in, has no subscription, or is not allowed for the project is skipped; the chain falls to the next link and at last to Claude, and the script says why. Without Herdr, `bin/genius agent` prints what the role resolved to and the brief ending: start an internal subagent with it. «Models» shows only the providers that are installed. The knowledge base without Ollama stores and searches by exact words; `bin/genius know stats` says what to install for search by meaning, `know reembed` adds the vectors later.
 - Onboarding (step 6, Finish) offers the models, never demands them: run `bin/genius agent roles` and `bin/genius know stats`, show what is here and what each missing piece would add (Ollama: cheaper agents and search by meaning; Codex: a second reviewer), with the exact install command. The user's «no» is final; ask once.
-- The gate (the user's decision of 2026-11-17: agents on other models must not wait for the user). «auto» mode cannot work through Ollama: its safety check runs on Anthropic's servers. So an agent on Ollama runs in «default» mode with the gate (`bin/lib/gate.py`, a PreToolUse hook, given by `bin/genius agent` through `claude --settings`). The gate answers every action, never «ask»: rules first (deny: push, merge, release, deploy, remote hosts, secrets, deleting outside the folder, privilege; allow: reading, editing inside the folder, tests, builds, local git, the heavy queue, the knowledge base, web search), then Claude as the judge for anything else (`claude -p`, default model sonnet), and deny when the judge does not answer. Every decision: `bin/genius gate log` (`state/gate.jsonl`). The judge also gets the user's earlier words from the knowledge base that bear on the action. A Claude Code permission dialog of a task agent (label `genius.role`; e.g. the protected `.claude` folder, which asks even after the gate's allow) is answered by the watcher through the same gate: allow → the one-time «Yes», logged as `watcher`; deny → the alert to the user. A task agent's trust dialog in the folder of a configured project is answered «trust» by the watcher, logged the same way (the user's decision of 2026-11-17: «для цього є вартовий, який має мене розвантажувати»); a trust dialog anywhere else stays the user's. This replaces «never answer a permission prompt» only for these agents; a merge, prod, money and a hold stay the user's word.
+- The gate (the user's decision of 2026-11-17: agents on other models must not wait for the user). «auto» mode cannot work through Ollama: its safety check runs on Anthropic's servers. So an agent on Ollama runs in «default» mode with the gate (`bin/lib/gate.py`, a PreToolUse hook, given by `bin/genius agent` through `claude --settings`). The gate has rules only, and no model (the user's decision of 2026-11-21: «те, що не покривають правила, йде до координатора — суддю вирізати»). Deny: push, merge, release, deploy, remote hosts, secrets, deleting outside the folder, privilege. Allow: reading, editing inside the folder, tests, builds, local git, an inline script (python/node, heredoc or -c) that only writes inside the folder, the heavy queue, the knowledge base, web search; a read-only look into a database container that runs on this Mac (`docker exec … psql|pg_dump --schema-only|mysql|redis-cli` with SELECT, SHOW or `begin read only` … `rollback`; a container whose own environment names a database outside this Mac is not covered); and stopping such a stack — `docker stop <name>` and `docker compose stop` for containers that run here, never `down`, `--volumes` or `rm`. A rule that does not decide answers «ask»: nothing runs, nothing is pressed, and the action goes to the coordinator. Every decision: `bin/genius gate log` (`state/gate.jsonl`), an uncovered one with the reason «no rule: to the coordinator». A Claude Code permission dialog of a task agent (label `genius.role`; e.g. the protected `.claude` folder, which asks even after the gate's allow) is answered by the watcher through the same gate: allow → the one-time «Yes», logged as `watcher`; deny or no rule → nothing is pressed, the screen is saved, a watch operation waits for the user and the coordinator gets one line. A task agent's trust dialog in the folder of a configured project is answered «trust» by the watcher, logged the same way (the user's decision of 2026-11-17: «для цього є вартовий, який має мене розвантажувати»); a trust dialog anywhere else stays the user's. This replaces «never answer a permission prompt» only for these agents; a merge, prod, money and a hold stay the user's word.
 
 ## Ticket critique
 
 The user's decision of 2026-11-17: 8 of 9 PR reviews were «request changes», because tickets gave the agents only the letter of the task. A script critiques a ticket before an autonomous engineer gets it (`bin/lib/ticket.py`).
 
 - `bin/genius ticket critique <ref>`: `<ref>` is a Jira key (`ABC-123`; the project is found by the key in its `tracker`) or `owner/repo#N`. It fetches the ticket (Jira: description, comments, «Blocks» links; GitHub: title, body, labels), saves it, and starts a `review` agent (Codex → Claude) read-only in the project's folder.
-- `--dry <ref>` prints the brief, starts nothing. `--sweep [--minutes N]` critiques each ticket that became ready in the last N minutes (default 120) and has no critique yet (`state/ticket-critique.json`), at most 2 at a time. `bin/genius ops sweep` runs it every 15 min: no new daemon.
+- The agent writes one file, `state/drafts/ticket-critique-<ref>.md`, in three parts: A the verdict (READY / FIX FIRST) and the fixes, B the exact text to add to the ticket, C the product questions («немає» when none).
+- A repeat of the same ref always writes a fresh draft: the old one moves to `state/drafts/archive/` first. A critique that writes nothing is retried once. After that it says why: the agent's screen is saved in `state/agents/`, and one operation asks the user.
+- The apply step (the user's decision of 2026-11-18: the sweep never asks «apply the critique?» for each ticket). When the draft is settled, the script writes Part B to `state/drafts/ticket-fixes-<ref>.md` and runs the project's own narrow write command. It then checks that the ticket holds the fixes, posts the comment, and closes the operation `critique-<ref>`. `bin/genius ticket apply <ref>` runs this step now; `--dry <ref>` prints the command and writes nothing.
+- `tracker` → `apply_cmd`: the write command, with the placeholders `{ref}`, `{text_file}` (the fixes), `{draft}`, `{project}`. The script shell-quotes the paths; do not quote them in the template. `comment_cmd` posts the comment the same way, and `apply_note` is its first line. Without `apply_cmd` the operation asks the user, as before.
+- Only the product questions of Part C become one operation with `needs: user`. The fixes wait for the answer, because the answer can change them. A READY critique closes its operation with no question.
+- A write that fails, or fixes that the ticket does not hold, ask the user in one line: `retry` / `skip`. A paused project and a hold get no write to the tracker and no agent.
+- Nothing else goes to Jira or GitHub: only `apply_cmd` and `comment_cmd`, and only in this step.
+- `--dry <ref>` prints the brief, starts nothing. `--sweep [--minutes N]` critiques each ticket that became ready in the last N minutes (default 120) and has no critique yet (`state/ticket-critique.json`), at most 2 at a time, then applies each finished critique. `bin/genius ops sweep` runs it every 15 min: no new daemon.
 - `project.json` → `tracker`: optional `keys` (Jira project keys), `ready_jql` (tickets in the AE-ready status); for GitHub `{"type": "github", "repo": "owner/repo", "ae_label": "<label>", "account": "<gh-login>"}` — `account` is the login that reads the repo; without it the active `gh` login is used.
 - The checklist, one line each: (1) every requirement is an AC with a test that can fail, and a helper-only test is flagged; (2) contradictions between ticket, spec and code, with file:line; (3) NFRs as ACs: security, quality gate, docs; (4) edge cases: failure of each external service, retries, empty/huge input, concurrency; (5) every needed file is in the scope list, Dependencies equal the tracker links; (6) the estimate block validates.
-- Result: `state/drafts/ticket-critique-<ref>.md`: Part A for the user (READY / FIX FIRST), Part B the text to add to the ticket. The operation `critique-<ref>` asks «apply / skip».
-- Nothing is written to Jira or GitHub by the script. Applying the fixes is the user's word.
+
+## The fix↔review loop of a PR
+
+The owner's goal of 2026-11-20: «не бачиш кінця дороги — посилай іншого; ти лише фінальне рев'ю і апрув». The fix and the review of one PR run by script; the coordinator gets the final verdict only (`bin/lib/review_loop.py`).
+
+- `bin/genius loop <owner/repo> <N> [--project p] [--max-rounds 4]` starts it on an open PR; `bin/genius loop status` shows every loop.
+- A round: a `review` agent (the role chain: Codex → Claude) reads the head worktree and the PR, and writes one `VERDICT: APPROVE` or `VERDICT: REQUEST CHANGES`, plus `PRODUCT QUESTION: none` or one exact question. Request changes → a `code` agent fixes in the same worktree, commits and ends with `READY FOR REVIEW <sha>`; then the next review starts.
+- The worktree: the clean one that already holds the head branch, else `<project>/.claude/worktrees/review-<N>` on branch `review-<N>` from `origin/<head>`. The review agent never writes a file.
+- Push rule, per project: `"loop": {"push": true}` in `projects/<name>/project.json` → the SCRIPT pushes the fix commit to the PR's own branch after every round, fast-forward only, never a force (a project: our side pushes review fixes). Without it the script only commits and the push stays the coordinator's step (a project: «do not push each commit»). No agent ever pushes.
+- The watcher (`bin/lib/agents_watch.py`) hands each finished turn of a loop agent to the loop: no operation per round, no answer from the knowledge base. The loop kills each agent after its turn.
+- Stops: approve → ONE line `[review-loop] #N approved at <sha> after K rounds — final review`. Max rounds, a product question, or an agent that wrote nothing a script can read → one operation `loop-<repo>-<N>` with `needs: user` and the exact question, plus one line here. Never a silent end, never a question in the chat.
+- Every spawn goes through `bin/genius agent`, so the brief critic and the project's provider limits apply (AGENTS.md «Models»).
+- Files: `state/review-loop/<key>.json` (the state), `<key>.jsonl` (one line per event), `<key>-r<k>-review.md` and `<key>-r<k>-fix.md` (what each agent wrote).
+- `python3 -I bin/lib/review_loop.py selftest`: a temp root, a fake hc, canned reports — approve after 2 rounds, a product question, the round limit, no verdict.
 
 ## Load on this computer
 
@@ -460,6 +498,8 @@ The user's decision of 2026-11-12: the user must see who works. Herdr shows a su
 - A sub-agent that asks a question shows as blocked in Herdr. Bring its question to the user; never answer its permission or trust prompt yourself.
 - Start it only in a folder that Claude Code already trusts (a project's path). In a new folder it stops at the trust prompt, and Herdr shows no status for it: the panel stays silent. After every start, check `hc get <name> --json`; with `"status": null`, read its screen and tell the user what it waits for.
 - The watcher does this by script, not by memory (the user's decision of 2026-11-12: «правила — це дроч, потрібен воркер»): `bin/genius agents watch` runs every 30 s (`agents watch start`; the SessionStart hook starts it, and `bin/lib/workers.py` brings it back after a Herdr restart — see «Pending operations»). For each sub-agent: text in its input unchanged for 60 s is the user's own answer → it presses Enter; an agent idle 2 min → its last message to `state/agents/<name>.md`, an operation `watch-<name>` with `"needs": "user"`, the voice, and one `[agents-watch]` line to this session; a permission dialog → the gate (see «Models»), a trust dialog in a project's folder → «trust», anything else → the same alert, never an answer; a screen unchanged 15 min while working → «hung». A `[agents-watch]` line in this session: read the saved report, tell the user, then act (save and stop, or pass the user's answer).
+- The watcher works only while at least one attached project is active (the user's rule of 2026-11-18): in `projects` of the config and not paused. An agent in a paused project or outside every project gets no answer, no Enter and no alert. With every project paused the pass reads nothing and logs one line «idle: no active project».
+- A question of a task agent (an AskUserQuestion dialog, or an idle agent whose last message ends with a question) is answered by the watcher itself when the knowledge base holds the user's decision on it (`bin/lib/agent_ask.py`): the rules first — never a merge, a push, a release, prod, money, a hold, legal, new product text — then the base, then a judge; not covered or the judge silent → the user, exactly as before. Each answer is a record in `state/gate.jsonl` («who»: «watcher-question») and an item on Attention, «Answered for you», with an «overrule» button (`bin/genius agents overrule <id>`), which says the user's own word in this chat. Self-check: `bin/genius agents selftest | demo`.
 - A restart of Herdr or of the Mac stops every sub-agent. The watcher keeps the work: the last screen goes to `state/agents/<name>.md`, and an operation `interrupted-<name>` asks the user on the panel: continue or not. «Continue» → a new sub-agent in the same folder whose brief points to the saved report, then close the operation. «Drop» → close it. Under a hold, lift the hold first (ask the user).
 - Without Herdr, use internal subagents as before.
 
@@ -468,14 +508,58 @@ The user's decision of 2026-11-12: the user must see who works. Herdr shows a su
 A long operation must survive the end of a session.
 
 - When you start an operation that waits (CI, a release, a deploy, a subagent, a nightly job), add it to `state/operations.json`: `{ "id", "project", "what", "waiting_for", "check", "next", "started" }`. `check` is a read-only command that shows its current state. Add `"needs": "user"` when it waits for the user's own action (a decision, a token, a manual step). Add `"queue": "next"` to a task for later (not started). The Herdr panel «Attention» shows every task that is not paused (the user's decision of 2026-11-15): 👤 waits for the user, then 🔄 in work, then 📋 next, each group by project rank. `"paused"`: the user paused it. `"covers"`: a word (or list of words) of a problem's text that this operation fixes, e.g. `"pr_title_check"`; `bin/status` then shows that problem as «known, in progress» with the ticket instead of in Attention (the user's decision of 2026-11-12).
+- The group ⚙️ GA in Attention is genius-ai itself: the tasks with `"project": "genius-ai"` (the user's decision of 2026-11-18).
 - An operation with `"needs": "user"` carries `"ask"`: the exact question in one short sentence, in the user's language. When the answer is a choice, it also carries `"answers"`: two or three short answers, always in English (`["merge", "postpone"]`): every control on the panel is labelled in English, like its section names (the user's decision of 2026-11-17); the question stays in the user's language. The panel shows the question in full with one button per answer and «later». A button stores the answer (`answered`, the operation stops waiting for the user) and types «Answer to «…» (<id>): <answer>» into this session: act on it like on the user's own message. «Later» pauses the operation. (`bin/genius ops answer <id> <text>`, `ops later <id>`.)
+- `bin/genius ops add "<what>" [--project p] [--ask "…"] [--answers "a|b"] [--check "cmd"] [--next "…"] [--done-when "cmd"]` writes one operation at once (`bin/lib/ops.py`); `--ask` makes it wait for the user (`needs: user`) and gives the panel its buttons; the command prints the id to quote. Every open question gets one, in the same reply that writes it: a question in text waits for nobody (the user's goal of 2026-11-20).
+- The handoff guard (`bin/lib/handoff_guard.py`) refuses a day whose `state/handoff.md` still holds an open question — a line with «Питання», a `?` or «чекає … слова/відповіді» — and that no `needs: user` operation tracks. A line matches by a quoted id, the id as a word, or the operation's `ask`. `bin/genius know digested <date>` runs it and exits 1, naming each line with a ready `ops add` command. Self-check: `python3 -I bin/lib/handoff_guard.py --selftest`.
 - When it ends, remove it (or update `waiting_for` and `next`).
 - Automatic cleanup (the user's decision of 2026-11-12: a script, not the agent): `bin/genius ops sweep` runs every 15 min as a background job (`ops sweep start`; the SessionStart hook starts it). Both jobs survive a Herdr restart without a human (the lesson of 2026-11-18: a restart stopped them, the Claude session survived, so no SessionStart hook ran): the hooks that run often (`bin/lib/statusline.py`, `bin/lib/know.py hook`) call `bin/lib/workers.py`, which starts each missing job at most once per 3 min, never a second copy; `… stop` by hand leaves `state/<label>.off` and the job stays off. Self-check: `python3 -I bin/lib/workers.py selftest`, `bin/genius … status`. It closes an operation whose `done_when` command exits 0, or whose pull request named in `check` is merged or closed, and marks `stale` what waits for the user with no update for 3 days. Every new operation gets a `done_when`: a read-only command that succeeds exactly when the work is finished (e.g. `gh pr view N -R owner/repo --json state -q .state | grep -q MERGED`).
 - Clean in time (the user's decision of 2026-11-12): the list shows only what really waits. Close an operation in the same reply that finishes it; never leave one whose `next` is «close this». At every live-control pass run each `check`: done → close it; changed → update `waiting_for`. An operation older than 3 days with no change → ask the user in one line: close, or what it waits for. A `check` that cannot run any more (a removed worktree, an old scratchpad path) → write a new one or close. A closed operation moves to `state/operations.closed.json` with `closed` and `closed_why`. The careful regular cleanup is `bin/genius ops review` (read-only: age, days since `updated`, each `check`'s output; it closes nothing) at the first live-control pass of a session and once a day; `bin/genius ops close <id> <why>` closes one with its evidence, `bin/genius ops touch <id>` records a look. Never close on a guess: an operation that waits for the user stays until the user answers.
-- The SessionStart hook injects the list first. In the first reply: report each one, run its `check`, then continue or close it.
+- The SessionStart hook injects the list first, every `needs: user` operation ahead of the rest with its `ask` and its answers. In the first reply: report each one, run its `check`, then continue or close it.
 - When the user ends the day («завтра продовжимо»): pause what waits for the user, write `state/handoff.md` (what is done, what is paused, what is next, per project). The SessionStart hook injects it first.
 - Work of a subagent in a scratchpad worktree: commit often; the scratchpad can be removed after the session, a commit on the branch stays.
 - A git worktree has no husky hooks (`.husky/_` is not there), so pre-push checks do not run. Before `git push` from a worktree, run the repo's pre-push suite yourself (`.husky/pre-push`, or the matching `package.json` script), with the «Load» limits. Push only when it passes.
+
+## Event queue (shadow)
+
+The user's decision of 2026-11-22: «взяти кращі практики firstmate, щоб закрити дірки». The gap: a background
+script calls `hc send` and nothing proves that the coordinator processed the line. A lost or doubled signal
+stays invisible.
+
+Firstmate (github.com/kunchenguid/firstmate @427056c, MIT) keeps a durable wake queue: an append-only file
+under a lock, a sequence per row, one stable key, and an acknowledgement per actor.
+`bin/lib/events.py` gives genius-ai the same mechanism. No line of firstmate is copied; its licence is MIT,
+and this section credits the mechanism.
+
+- `state/events/queue.jsonl` is append-only and fsynced. One line is one record: `emit`, `bump` (the same
+  event again: its count grows), `ack` (`by` = the recipient session). `seq` grows by one per line, so a
+  lost line shows.
+- The dedupe key is `source|subject|transition`. An emit of a key whose event is still unacknowledged and
+  younger than `GENIUS_EVENTS_BURST` (default 300 s) is folded into that event: one event with a count. A
+  key whose event is acknowledged starts a new event. `id` names the record for ever.
+- `ack` is per recipient and per id: two sessions never consume each other's events. The recipient is the
+  constant «coordinator»: an install has one coordinator. The Herdr terminal name in `to` is information
+  only, never an address.
+- SHADOW MODE: nothing is delivered. Each source keeps its `hc send` exactly as it is; the queue only
+  records. `state/events/sent.jsonl` holds the line that really went out, with the event it carries.
+- The queue is compacted by `archive`, which the ops sweep runs: an acknowledged event older than 14 days
+  moves, line for line, to `state/events/archive/<date>.jsonl.gz` — the retention of the day log. A `seq`
+  marker line keeps the highest number, so an id is never given twice. An unreadable line is archived, never
+  dropped.
+- Sources: `bin/lib/agents_watch.py` (`finished`, `waits`, `permission`, `hung`, `interrupted`),
+  `bin/lib/ops.py` (`closed`, `stale`), `bin/status` (CI `failed`/`recovered`, URL `down`/`back`). A source
+  reports a change, not a level: the first sighting of a subject only sets the baseline.
+- `bin/genius events pending` · `log [-n N]` · `diff [--minutes N]` · `archive [--days N]`. `diff` compares
+  both sides over the same window: `missing` (a send whose event the queue does not hold), `unsent` (an
+  event whose send never happened), `quiet` (an event with no send by design), `informational` (a send that
+  no event claimed). It exits 1 on a mismatch, so a script can gate the switch to delivery on it.
+- Every source records through `events.shadow()`, which never raises: a queue that cannot be written never
+  stops the watcher, the sweep or the status check. One line on stderr is the only trace.
+- `python3 -I bin/lib/events.py selftest`: a torn write, a process killed right after its record, a
+  duplicate emit, two writers at once, an unknown id, a burst, a level against a change, both sides of
+  `diff`, and the archive. `bin/genius selfcheck` fails when a source stops recording.
+- Delivery (Stop/StopFailure auto-wake, the guard, the context budget) is a later step: this queue proves
+  that no event is lost, it does not deliver yet.
 
 ## Many projects: labels and what is spoken
 
@@ -483,7 +567,7 @@ The user's decision of 2026-11-06. With many projects, the user must hear only w
 
 ### Label of a project
 
-- Each project has a label in `projects/<name>/project.json`: `{ "tag": "🌐 LW", "spoken": "Сайт" }`. Not in the config.
+- Each project has a label in `projects/<name>/project.json`: `{ "tag": "🌐 EX", "spoken": "Сайт" }`. Not in the config.
 - Optional there: `"rank": 1` — the order of projects in Attention, on the panel and in reports (1 first); the focus project gets 1 (the user's decision of 2026-11-12: the focus project first, until its launch).
 - Optional there: `"release": { "after": "19:00", "before": "23:00", "tz": "Europe/Kyiv" }`, only when the project's documents state a release window (the panel shows «release open / closed»); `"paused": {...}` while the user paused the project (dimmed, silent).
 - Optional there: `"tracker": { "type": "jira", "blocked_jql": "<JQL of the tickets that stand blocked>", "env_file": "~/path/to/.env" }` — `bin/status` shows each such ticket as a problem: red and on top of Attention, like a failed CI run (the user's decision of 2026-11-16). Credentials come from the environment or `env_file` (`JIRA_URL`, `JIRA_USERNAME`, `JIRA_API_TOKEN`), never from the config. An operation that `covers` the ticket's key shows it as «known, in progress».
@@ -493,7 +577,7 @@ The user's decision of 2026-11-06. With many projects, the user must hear only w
 
 ### Text
 
-- A message about a project starts with its tag: `🌐 LW · release`.
+- A message about a project starts with its tag: `🌐 EX · release`.
 - A report about many projects has one block per project; blocks with problems come first.
 - One project, one Claude session (terminal tab). The tab title is the tag. The genius-ai session collects the summary.
 
@@ -502,6 +586,6 @@ The user's decision of 2026-11-06. With many projects, the user must hear only w
 - The 🔊 line about a project starts with its spoken name: «Сайт: реліз пройшов».
 - Speak only what matters: done, failed, blocked, or what is needed from the user. Never speak routine steps («I read», «I search», «I look»).
 - With more than one project in the config, routine work statuses are off («I read», «I search»).
-  Important background events are spoken: write such a Bash or Agent `description` as «<spoken name>: <event>», for example «Сайт: CI зелений, зливаю реліз», «Чіка: конкуренти записані». `voice/lib/work_status.py` speaks only descriptions that start with a project's spoken name and a colon.
+  Important background events are spoken: write such a Bash or Agent `description` as «<spoken name>: <event>», for example «Сайт: CI зелений, зливаю реліз», «Демо: конкуренти записані». `voice/lib/work_status.py` speaks only descriptions that start with a project's spoken name and a colon.
 - Important = a step finished, a check passed or failed, something was written to prod, a wait started or ended, the user must act. One short sentence.
 - When the user needs to act, the 🔊 line says what exactly is needed.

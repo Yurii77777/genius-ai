@@ -15,6 +15,9 @@ Rules it keeps:
 - a job the user stopped by hand stays off: `bin/genius agents watch stop` / `ops sweep stop` leave
   state/<label>.off, and only a start clears it;
 - nothing runs on a fresh install: the config must be onboarded (the same rule as the SessionStart hook);
+- the watcher may run idle: with every project paused its pass only reads the config and does nothing
+  (bin/lib/agents_watch.py), so it is not stopped or held back here, and the first pass after a project
+  resumes works at once;
 - no new daemon, nothing outside this folder, no launchd job.
 """
 import json
