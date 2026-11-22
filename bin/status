@@ -37,6 +37,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "bin", "lib"))
+try:
+    import events as eventq                     # the shadow event queue (bin/lib/events.py): records, sends nothing
+except Exception:                               # a status check that runs is worth more than its queue
+    eventq = None
 WORDS = {
     "uk": {"branch": "гілка", "dirty": "незбережено", "running": "іде", "missing": "шляху немає",
            "no_answer": "немає відповіді", "cert": "сертифікат не довірений",
@@ -89,6 +94,23 @@ def url_check(url):
         return 0
     except Exception:
         return 0
+
+
+def transition(source, project, subject, bad, bad_word, good_word, what, url=""):
+    """One change of one subject, bad → good or good → bad, goes to the shadow event queue
+    (bin/lib/events.py): recorded, sent nowhere. The first sighting only sets the baseline, and a repeated
+    state raises no event, so the queue holds transitions and not levels. A failure of the queue never
+    fails the check."""
+    if eventq is None:
+        return
+    try:
+        prev = eventq.mark(source, subject, "down" if bad else "ok")
+        if prev is None or (prev == "down") == bad:
+            return
+        eventq.emit(source, subject, bad_word if bad else good_word, project=project,
+                    text=f"{what} {bad_word if bad else good_word}", data={"url": url} if url else {})
+    except Exception:
+        pass
 
 
 def gh_env(repo, services):
@@ -645,6 +667,8 @@ def project_state(p, services, ops):
         for wf, (conclusion, run_url) in latest.items():
             if conclusion == "failure":
                 problem(f"main: {wf} failure", run_url)
+            transition("status", name, f"{name}/ci/{wf}", conclusion == "failure", "failed", "recovered",
+                       f"{st['tag']} main: {wf}", run_url)
     # Work that waits only on this Mac (the owner's goal of 2026-11-20): a branch outside every open PR
     # and a worktree with uncommitted files are invisible until someone names them.
     for text, data in unpushed_findings(unpushed(path, name, repo, env, meta)):
@@ -666,6 +690,8 @@ def project_state(p, services, ops):
                 problem(f"{s['name']}: {W['cert']}", s["url"])
             elif not ok:
                 problem(f"{s['name']}: HTTP {code or W['no_answer']}", s["url"])
+            transition("status", name, f"{name}/url/{s['name']}", not ok, "down", "back",
+                       f"{st['tag']} {s['name']}", s["url"])
     return known_problems(st, mine)
 
 

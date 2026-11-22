@@ -42,6 +42,12 @@ For each sub-agent (a Herdr terminal with a parent) one pass does this:
   coordinator writes the port block into each brief and into this file). Its agent idle for
   SERVER_IDLE → told once per turn to stop its servers; its agent gone → the server is stopped here;
   a port with no owner → one line to the coordinator.
+
+Every signal of this file (finished, waits, permission, hung, interrupted) is also recorded in the shadow
+event queue (bin/lib/events.py, the user's decision of 2026-11-22). The queue sends nothing: each `hc send`
+stays as it is, and the line it really sent is written to state/events/sent.jsonl next to the event, so
+`bin/genius events diff` can prove that no signal was lost. A queue that cannot be written never stops the
+watcher.
 """
 import hashlib
 import json
@@ -55,6 +61,10 @@ from datetime import datetime
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import pause                                    # the paused mark: the one reading of which projects are active
+try:
+    import events                               # the shadow event queue (bin/lib/events.py): records, sends nothing
+except Exception:                               # a watcher that runs is worth more than its queue
+    events = None
 STATE = os.path.join(ROOT, "state", "agents-watch.json")
 OPS = os.path.join(ROOT, "state", "operations.json")
 AGENTS_DIR = os.path.join(ROOT, "state", "agents")
@@ -183,7 +193,9 @@ def interrupted(name, info, cfg, W, active):
                 "resume": {"cwd": info.get("cwd"), "title": title, "report": f"state/agents/{name}.md"},
                 "started": datetime.now().astimezone().isoformat(timespec="minutes"), "by": "agents-watch"})
     write(OPS, ops)
-    alert({"name": name, "parent": info.get("parent")}, W["cut"], spoken, cfg)
+    eid = record(name, "interrupted", project=project or "", to=info.get("parent") or "",
+                 text=f"{tag} {name}: {W['cut']}".strip())
+    alert({"name": name, "parent": info.get("parent")}, W["cut"], spoken, cfg, eid)
     print(f"{stamp} interrupted {name}: report saved, the user is asked")
 
 
@@ -362,14 +374,35 @@ def unpushed_branches(cwd):
             out.append(f"{br} ({n} commit{'s' if n != '1' else ''} not pushed)")
     return out
 
-def alert(term, text, spoken, cfg):
-    """One alert: the voice (it stays silent when sound is off), and one line to the parent session."""
+def alert(term, text, spoken, cfg, event=None):
+    """One alert: the voice (it stays silent when sound is off), and one line to the parent session.
+    `event` is the id the shadow queue gave the same signal: the line that really goes out is recorded
+    with it, so `bin/genius events diff` compares the two sides. The send itself does not change."""
     voice = os.path.join(ROOT, "voice", "bin", "speak")
     if os.path.exists(voice) and (cfg.get("voice") or {}).get("enabled"):
         subprocess.Popen([voice, f"{spoken}: {text}" if spoken else text],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if term.get("parent"):
-        sh(["hc", "send", term["parent"], f"[agents-watch] {term.get('name')}: {text}"], timeout=60)
+        line = f"[agents-watch] {term.get('name')}: {text}"
+        sh(["hc", "send", term["parent"], line], timeout=60)
+        record_sent(term["parent"], line, event)
+
+
+def record(subject, transition, project="", to="", send="", text=""):
+    """One event of the shadow queue (bin/lib/events.py): recorded, never sent. Its id, or None."""
+    if not events:
+        return None
+    return events.shadow("agents-watch", subject, transition, project=project, to=to, send=send, text=text)
+
+
+def record_sent(to, text, event):
+    """The line that really went out, with the event it carries: the other side of `events diff`."""
+    if not events:
+        return
+    try:
+        events.note_sent(to, text, "agents-watch", event or "")
+    except Exception:
+        pass
 
 
 def watch():
@@ -443,7 +476,9 @@ def watch():
             # waiting in the heavy queue (the owner's meeting, local model work, another run) is not «hung»
             if now - s.get("changed", now) > HUNG_AFTER and not s.get("hung") and not queued(name):
                 s["hung"] = True
-                alert(t, W["hung"].format(n=name, m=HUNG_AFTER // 60), spoken, cfg)
+                eid = record(name, "hung", project=project, to=t.get("parent") or "",
+                             text=f"{tag} {name}: {W['hung'].format(n=name, m=HUNG_AFTER // 60)}")
+                alert(t, W["hung"].format(n=name, m=HUNG_AFTER // 60), spoken, cfg, eid)
             elif now - s.get("changed", now) <= HUNG_AFTER:
                 s.pop("hung", None)
             continue
@@ -472,7 +507,9 @@ def watch():
             if s.get("alerted") != f"dialog-{t.get('turn')}":
                 s["alerted"] = f"dialog-{t.get('turn')}"
                 set_op(name, project, f"{tag} {name}: {W['dialog'].format(n=name)}".strip(), True)
-                alert(t, W["dialog"].format(n=name), spoken, cfg)
+                eid = record(name, "permission", project=project, to=t.get("parent") or "",
+                             text=f"{tag} {name}: {W['dialog'].format(n=name)}".strip())
+                alert(t, W["dialog"].format(n=name), spoken, cfg, eid)
             continue
 
         # Claude Code may show its own suggested next prompt in the input, and a screen read cannot
@@ -528,11 +565,18 @@ def watch():
                 except ValueError:
                     labels = {}
             if labels.get("genius.role") and t.get("parent"):
-                sh(["hc", "send", t["parent"], f"[agents-watch] {name} finished its turn: the report is in "
-                    f"state/agents/{name}.md (its screen: state/agents/{name}.screen.md, hc read {name}). Read it, check it, tell the user, then stop the agent."
-                    + ("".join(f" UNPUSHED: {b} in {t.get('cwd')} — push it and open the PR in this same reply, or tell the user why it is held."
-                               for b in unpushed_branches(t.get("cwd"))))],
-                   timeout=60)
+                line = (f"[agents-watch] {name} finished its turn: the report is in "
+                        f"state/agents/{name}.md (its screen: state/agents/{name}.screen.md, hc read {name}). Read it, check it, tell the user, then stop the agent."
+                        + ("".join(f" UNPUSHED: {b} in {t.get('cwd')} — push it and open the PR in this same reply, or tell the user why it is held."
+                                   for b in unpushed_branches(t.get("cwd")))))
+                eid = record(name, "finished", project=project, to=t["parent"], send=line,
+                             text=f"{tag} {name}: finished its turn, the report is in state/agents/{name}.md")
+                sh(["hc", "send", t["parent"], line], timeout=60)
+                record_sent(t["parent"], line, eid)
+            else:
+                # no report to read (not a task agent, or no parent session): the wait is still a signal
+                record(name, "waits", project=project, to=t.get("parent") or "",
+                       text=f"{tag} {name}: {W['waits'].format(n=name)}".strip())
 
     parent = next((t.get("parent") for t in data.get("terminals", []) if t.get("parent")), None)
     servers(st, seen, parent)
@@ -617,8 +661,8 @@ def selftest():
     import contextlib
     import io
     import tempfile
-    global ROOT, STATE, OPS, AGENTS_DIR, sh
-    keep = (ROOT, STATE, OPS, AGENTS_DIR, sh)
+    global ROOT, STATE, OPS, AGENTS_DIR, sh, events
+    keep = (ROOT, STATE, OPS, AGENTS_DIR, sh, events)
     tmp = tempfile.mkdtemp(prefix="genius-watch-")
     terminals, calls, fails = [], [], []
 
@@ -645,6 +689,7 @@ def selftest():
     OPS = os.path.join(tmp, "state", "operations.json")
     AGENTS_DIR = os.path.join(tmp, "state", "agents")
     sh = fake_sh
+    events = None       # the queue writes no file of the install here; its own test is bin/lib/events.py selftest
     try:
         def project(name, meta):
             os.makedirs(os.path.join(tmp, "projects", name), exist_ok=True)
@@ -710,7 +755,7 @@ def selftest():
         check("a resumed project's agent is watched again",
               [c[2] for c in calls if c[:2] == ["hc", "read"]] == ["a1w", "b1"], calls)
     finally:
-        ROOT, STATE, OPS, AGENTS_DIR, sh = keep
+        ROOT, STATE, OPS, AGENTS_DIR, sh, events = keep
     if fails:
         print(f"agents-watch selftest: {len(fails)} failed")
         sys.exit(1)

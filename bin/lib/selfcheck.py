@@ -15,6 +15,9 @@ It checks:
    `claude`/`codex` with a brief is a bypass. Herdr workers (`bin/genius ops sweep`, the watcher) run a shell
    loop, not a brief: their `hc run` is not counted.
 5. `bin/genius` routes `selfcheck`, so the test is one word away.
+5b. Every source of the shadow event queue still records there, and `bin/genius events` is one word away
+   (`bin/lib/events.py`, the user's decision of 2026-11-22). A source that stops recording reopens the gap
+   between a background signal and the coordinator, and nothing else would show it.
 6. Every brief also carries the context of `bin/lib/briefctx.py` — the owner's rules from the knowledge base and the
    project's skills — before «Critic notes», on both paths: `bin/genius agent` and the Agent-tool hook. A Codex or
    Ollama agent has no Claude Code hooks, so a brief that skips it leaves that model without the owner's words.
@@ -156,6 +159,22 @@ def main():
 
     # 6) one word away
     check("bin/genius routes selfcheck", "selfcheck" in text(os.path.join(ROOT, "bin", "genius")))
+
+    # 7) the shadow event queue (bin/lib/events.py, the user's decision of 2026-11-22): a source that stops
+    # recording leaves the gap the queue exists to close, and nothing else would notice. The rule is a
+    # mechanism: the queue is one word away, and every source writes through it.
+    check("bin/genius routes events",
+          re.search(r"^\s*events\)", text(os.path.join(ROOT, "bin", "genius")), re.M) is not None)
+    for name in ("agents_watch.py", "ops.py"):
+        check(f"bin/lib/{name} records its signals in the shadow queue",
+              "events.shadow(" in text(os.path.join(LIB, name)), name)
+    status_src = text(os.path.join(ROOT, "bin", "status"))
+    body = status_src[status_src.find("def transition("):]
+    body = body[:body.find("\ndef ", 1) if body.find("\ndef ", 1) > 0 else len(body)]
+    check("bin/status records its CI and URL transitions",
+          "eventq.mark(" in body and "eventq.emit(" in body, body[:80])
+    check("bin/status keeps a failing queue from failing the check",
+          re.search(r"except Exception:\s*\n\s*pass", body) is not None, body[-160:])
 
     print(f"\nselfcheck: {len(fails)} failed of {checks}" if fails else f"\nselfcheck: ok ({checks})")
     return 1 if fails else 0

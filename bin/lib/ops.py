@@ -21,6 +21,12 @@
 `review` never closes, changes or writes anything: the agent reads it, closes only what the check proves
 finished, and asks the user about the rest (AGENTS.md «Pending operations»). Paused operations are listed
 but not checked. A check runs with a timeout; one that fails or hangs is reported as such.
+
+The sweep records each of its two changes in the shadow event queue (bin/lib/events.py, the user's decision
+of 2026-11-22): `closed` and `stale`, one record each. It also runs the queue's `archive` (the coordinator's
+decision of 2026-11-22): an acknowledged event older than two weeks leaves the queue for
+state/events/archive/<date>.jsonl.gz. The queue sends nothing; `bin/genius events diff` compares it with the
+lines that really went out.
 """
 import json
 import os
@@ -33,6 +39,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__
 OPS = os.path.join(ROOT, "state", "operations.json")
 CLOSED = os.path.join(ROOT, "state", "operations.closed.json")
 STALE_DAYS = 3
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+try:
+    import events                               # the shadow event queue (bin/lib/events.py): records, sends nothing
+except Exception:                               # a sweep that runs is worth more than its queue
+    events = None
+
+
+def record(subject, transition, project, text):
+    """One event of the shadow queue (bin/lib/events.py). No failure here: the sweep closes and marks what it
+    must, whatever the queue does."""
+    if events:
+        events.shadow("ops-sweep", subject, transition, project=project, text=text)
 
 
 def read(path, default):
@@ -266,6 +284,7 @@ def sweep():
                 reason = f"{pr} is {state.lower()}"
         if reason:
             close(o["id"], f"auto (ops sweep): {reason}")
+            record(o["id"], "closed", o.get("project", ""), f"{o['id']} closed: {reason[:120]}")
             closed.append(o["id"])
             continue
         idle = days_since(o.get("updated") or o.get("started", ""))
@@ -275,6 +294,8 @@ def sweep():
                 if f["id"] == o["id"]:
                     f["stale"] = date.today().isoformat()
             write(OPS, fresh)
+            record(o["id"], "stale", o.get("project", ""),
+                   f"{o['id']} waits for the user for {STALE_DAYS}+ days")
             marked.append(o["id"])
     try:   # tickets that became ready since the last pass get a critique, a finished one its apply step
         sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -283,9 +304,16 @@ def sweep():
         critiqued = f"started {started or 'none'}, applied {applied or 'none'}"
     except Exception as e:
         critiqued = f"error {type(e).__name__}"
+    archived = ""
+    if events:      # the queue is compacted here too: an acknowledged event older than two weeks moves out
+        try:
+            n = events.archive()["archived"]
+            archived = f"; events archived {n}" if n else ""
+        except Exception as e:
+            archived = f"; events archive error {type(e).__name__}"
     stamp = datetime.now().isoformat(timespec="seconds")
     print(f"{stamp} sweep: critiques {critiqued}")
-    print(f"{stamp} sweep: closed {closed or 'none'}; stale {marked or 'none'}")
+    print(f"{stamp} sweep: closed {closed or 'none'}; stale {marked or 'none'}{archived}")
 
 
 def sweep_job(action):

@@ -517,6 +517,47 @@ A long operation must survive the end of a session.
 - Work of a subagent in a scratchpad worktree: commit often; the scratchpad can be removed after the session, a commit on the branch stays.
 - A git worktree has no husky hooks (`.husky/_` is not there), so pre-push checks do not run. Before `git push` from a worktree, run the repo's pre-push suite yourself (`.husky/pre-push`, or the matching `package.json` script), with the «Load» limits. Push only when it passes.
 
+## Event queue (shadow)
+
+The user's decision of 2026-11-22: «взяти кращі практики firstmate, щоб закрити дірки». The gap: a background
+script calls `hc send` and nothing proves that the coordinator processed the line. A lost or doubled signal
+stays invisible.
+
+Firstmate (github.com/kunchenguid/firstmate @427056c, MIT) keeps a durable wake queue: an append-only file
+under a lock, a sequence per row, one stable key, and an acknowledgement per actor.
+`bin/lib/events.py` gives genius-ai the same mechanism. No line of firstmate is copied; its licence is MIT,
+and this section credits the mechanism.
+
+- `state/events/queue.jsonl` is append-only and fsynced. One line is one record: `emit`, `bump` (the same
+  event again: its count grows), `ack` (`by` = the recipient session). `seq` grows by one per line, so a
+  lost line shows.
+- The dedupe key is `source|subject|transition`. An emit of a key whose event is still unacknowledged and
+  younger than `GENIUS_EVENTS_BURST` (default 300 s) is folded into that event: one event with a count. A
+  key whose event is acknowledged starts a new event. `id` names the record for ever.
+- `ack` is per recipient and per id: two sessions never consume each other's events. The recipient is the
+  constant «coordinator»: an install has one coordinator. The Herdr terminal name in `to` is information
+  only, never an address.
+- SHADOW MODE: nothing is delivered. Each source keeps its `hc send` exactly as it is; the queue only
+  records. `state/events/sent.jsonl` holds the line that really went out, with the event it carries.
+- The queue is compacted by `archive`, which the ops sweep runs: an acknowledged event older than 14 days
+  moves, line for line, to `state/events/archive/<date>.jsonl.gz` — the retention of the day log. A `seq`
+  marker line keeps the highest number, so an id is never given twice. An unreadable line is archived, never
+  dropped.
+- Sources: `bin/lib/agents_watch.py` (`finished`, `waits`, `permission`, `hung`, `interrupted`),
+  `bin/lib/ops.py` (`closed`, `stale`), `bin/status` (CI `failed`/`recovered`, URL `down`/`back`). A source
+  reports a change, not a level: the first sighting of a subject only sets the baseline.
+- `bin/genius events pending` · `log [-n N]` · `diff [--minutes N]` · `archive [--days N]`. `diff` compares
+  both sides over the same window: `missing` (a send whose event the queue does not hold), `unsent` (an
+  event whose send never happened), `quiet` (an event with no send by design), `informational` (a send that
+  no event claimed). It exits 1 on a mismatch, so a script can gate the switch to delivery on it.
+- Every source records through `events.shadow()`, which never raises: a queue that cannot be written never
+  stops the watcher, the sweep or the status check. One line on stderr is the only trace.
+- `python3 -I bin/lib/events.py selftest`: a torn write, a process killed right after its record, a
+  duplicate emit, two writers at once, an unknown id, a burst, a level against a change, both sides of
+  `diff`, and the archive. `bin/genius selfcheck` fails when a source stops recording.
+- Delivery (Stop/StopFailure auto-wake, the guard, the context budget) is a later step: this queue proves
+  that no event is lost, it does not deliver yet.
+
 ## Many projects: labels and what is spoken
 
 The user's decision of 2026-11-06. With many projects, the user must hear only what matters.

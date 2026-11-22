@@ -5,6 +5,9 @@
 # bin/genius new                  clean start: move the personal data to backup/<date>/ (nothing deleted)
 # bin/genius adopt                «this is my install»: bind a moved/copied config to this folder and Mac
 # bin/genius where                show where the config was made and where it runs now
+# bin/genius events [pending|log|diff|archive]   the shadow event queue: what the coordinator did not
+#                                 acknowledge, the queue itself, the queue against the lines that hc send
+#                                 really sent, and the compaction of the queue (bin/lib/events.py)
 # bin/genius ops review | close <id> <why> | touch <id>   careful regular cleanup of pending operations
 # bin/genius agents watch [start|stop|status]   the sub-agent watcher: sends the user's typed answer, alerts on waits (bin/lib/agents_watch.py)
 # bin/genius agents overrule <id> | selftest | demo   the watcher's answer to an agent's question, and its checks (bin/lib/agent_ask.py)
@@ -51,6 +54,7 @@ case "${1:-}" in
   loop) shift; exec /usr/bin/python3 bin/lib/review_loop.py "$@" ;;
   load) shift; exec /usr/bin/python3 bin/lib/load.py "$@" ;;
   gate) shift; exec /usr/bin/python3 bin/lib/gate.py "$@" ;;
+  events) shift; exec /usr/bin/python3 bin/lib/events.py "$@" ;;
   ops) shift; exec /usr/bin/python3 bin/lib/ops.py "$@" ;;
   agents) shift; exec /usr/bin/python3 bin/lib/agents_watch.py "$@" ;;
   *) exec claude "Почни сесію genius-ai" "$@" ;;
