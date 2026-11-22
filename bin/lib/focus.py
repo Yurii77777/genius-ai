@@ -143,7 +143,10 @@ def combine(closed, manual, merged, tags, today):
             continue
         items.append((str(o.get("closed", "")), (tags.get(o.get("project"), "") + " " + text).strip()[:90]))
     for m in manual:
-        items.append((str(m.get("at", "")), (tags.get(m.get("project"), "") + " " + str(m.get("text", ""))).strip()[:90]))
+        text = str(m.get("text", ""))
+        if any(re.search(rf"(?:PR\s*|#){n}\b", text) for n in nums):
+            continue                            # the same merge, already listed from gh (a done_auto record)
+        items.append((str(m.get("at", "")), (tags.get(m.get("project"), "") + " " + text).strip()[:90]))
     for at, tag, n, title in merged:
         items.append((at, f"{tag} PR #{n} {title}".strip()[:90]))
     items.sort(key=lambda x: x[0])
@@ -220,6 +223,10 @@ def selftest():
     r.append(ok(out == ["🅰 A pack approved", "🅰 A PR #12 fix prices", "🅰 A version activated", "🅰 A PR #13 add pages"],
                 "dedupe by PR number + order by time (oldest first; the panel shows newest first)"))
     r.append(ok(len([x for x in out if "#12" in x]) == 1, "PR #12 once"))
+    dup = manual + [{"at": "2026-11-17T12:30:00", "project": "a", "text": "✅ PR #13 злито в develop"}]
+    r.append(ok(combine(closed, dup, merged, tags, today)
+                == ["🅰 A pack approved", "🅰 A PR #12 fix prices", "🅰 A version activated", "🅰 A PR #13 add pages"],
+                "a done record naming a merged PR is not a second line"))
     r.append(ok(combine([], [], [], tags, today) == [], "empty"))
     sys.exit(0 if all(r) else 1)
 

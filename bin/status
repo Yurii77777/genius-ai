@@ -37,19 +37,29 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "bin", "lib"))
+try:
+    import events as eventq                     # the shadow event queue (bin/lib/events.py): records, sends nothing
+except Exception:                               # a status check that runs is worth more than its queue
+    eventq = None
 WORDS = {
     "uk": {"branch": "гілка", "dirty": "незбережено", "running": "іде", "missing": "шляху немає",
            "no_answer": "немає відповіді", "cert": "сертифікат не довірений",
            "after": "після", "before": "до", "known": "відома, в роботі",
            "unpinned": "не закріплений: bin/status --pin", "changed": "сертифікат не той, що закріплений",
            "gh_outage": "збій GitHub Actions", "maybe_gh": "можливо, збій GitHub, а не код",
-           "conflict": "конфлікт з", "stale": "застарів", "days": "дн."},
+           "conflict": "конфлікт з", "stale": "застарів", "days": "дн.",
+           "unpushed": "⚠️ {n} гілок поза PR: {names}", "unpushed1": "⚠️ гілка поза PR: {names}",
+           "dirty_wt": "⚠️ незбережено у {n} робочих копіях: {names}",
+           "dirty_wt1": "⚠️ незбережено у робочій копії {names}"},
     "en": {"branch": "branch", "dirty": "uncommitted", "running": "running", "missing": "path missing",
            "no_answer": "no answer", "cert": "certificate not trusted",
            "after": "after", "before": "before", "known": "known, in progress",
            "unpinned": "not pinned: bin/status --pin", "changed": "certificate is not the pinned one",
            "gh_outage": "GitHub Actions outage", "maybe_gh": "maybe GitHub, not the code",
-           "conflict": "conflict with", "stale": "stale", "days": "d"},
+           "conflict": "conflict with", "stale": "stale", "days": "d",
+           "unpushed": "⚠️ {n} branches without a PR: {names}", "unpushed1": "⚠️ branch without a PR: {names}",
+           "dirty_wt": "⚠️ uncommitted in {n} worktrees: {names}", "dirty_wt1": "⚠️ uncommitted in worktree {names}"},
 }
 W = WORDS["en"]
 
@@ -84,6 +94,23 @@ def url_check(url):
         return 0
     except Exception:
         return 0
+
+
+def transition(source, project, subject, bad, bad_word, good_word, what, url=""):
+    """One change of one subject, bad → good or good → bad, goes to the shadow event queue
+    (bin/lib/events.py): recorded, sent nowhere. The first sighting only sets the baseline, and a repeated
+    state raises no event, so the queue holds transitions and not levels. A failure of the queue never
+    fails the check."""
+    if eventq is None:
+        return
+    try:
+        prev = eventq.mark(source, subject, "down" if bad else "ok")
+        if prev is None or (prev == "down") == bad:
+            return
+        eventq.emit(source, subject, bad_word if bad else good_word, project=project,
+                    text=f"{what} {bad_word if bad else good_word}", data={"url": url} if url else {})
+    except Exception:
+        pass
 
 
 def gh_env(repo, services):
@@ -294,6 +321,153 @@ def pr_findings(prs, stale_days=3, now=None):
     return problems, notes
 
 
+UNPUSHED_TTL = 600                                  # 10 min: the panel asks often, git is not cheap
+# Noise on a worktree is not work: a generated file, a dependency folder, a scratch note (the user's
+# decision of 2026-11-20).
+IGNORED_UNCOMMITTED = re.compile(
+    r"(^|/)(next-env\.d\.ts|\.doc-index|tmp|node_modules|\.brief\.md|\.brand-profile-source\.png|\.tmp-[^/]*)(/|$)")
+# A long-lived integration branch is not work outside a PR (the user's decision of 2026-11-20);
+# project.json → "integration": ["release"] adds the project's own.
+INTEGRATION = {"main", "master", "develop", "development", "dev", "staging", "release", "production", "prod"}
+
+
+def default_branch(path):
+    """origin's default branch: from origin/HEAD, else the first of main, develop, master, dev that exists."""
+    ref = sh("git", "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+    if ref.startswith("origin/"):
+        return ref[len("origin/"):]
+    for cand in ("main", "develop", "master", "dev"):
+        if sh("git", "-C", path, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{cand}"):
+            return cand
+    return ""
+
+
+def worktree_list(text):
+    """`git worktree list --porcelain` → [{"path", "branch"}]; a detached worktree has branch ""."""
+    out = []
+    for block in (text or "").split("\n\n"):
+        path, branch = "", ""
+        for line in block.splitlines():
+            if line.startswith("worktree "):
+                path = line[len("worktree "):].strip()
+            elif line.startswith("branch "):
+                branch = line[len("branch "):].strip().removeprefix("refs/heads/")
+        if path:
+            out.append({"path": path, "branch": branch})
+    return out
+
+
+def dirty_files(text):
+    """`git status --porcelain` → the files, minus next-env.d.ts, .doc-index and tmp/ (the project's noise)."""
+    files = []
+    for line in (text or "").splitlines():
+        name = line[3:] if len(line) > 3 else ""
+        for part in name.split(" -> "):              # "R  old -> new" counts both names
+            part = part.strip().strip('"')
+            if part and not IGNORED_UNCOMMITTED.search(part):
+                files.append(part)
+    return files
+
+
+def cherry_extra(text):
+    """`git cherry <base> <branch>` → the commits that the base does not hold even as a patch ("+" lines)."""
+    return [l[2:].strip() for l in (text or "").splitlines() if l.startswith("+ ")]
+
+
+def ahead_of(path, base_ref):
+    """{branch: commits ahead of base_ref} in ONE `git for-each-ref` (ahead-behind, git 2.41); an older
+    git prints the format literally, then every branch is counted alone."""
+    refs = sh("git", "-C", path, "for-each-ref", "--format=%(refname:short) %(ahead-behind:" + base_ref + ")",
+              "refs/heads")
+    ahead = {}
+    for line in refs.splitlines():
+        parts = line.rsplit(" ", 2)
+        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+            ahead[parts[0]] = int(parts[1])
+    if ahead:
+        return ahead
+    names = sh("git", "-C", path, "for-each-ref", "--format=%(refname:short)", "refs/heads").splitlines()
+    return {b.strip(): 1 for b in names if b.strip()}
+
+
+def branches_without_pr(path, base, base_ref, heads, skip=()):
+    """[{"branch", "commits"}] — branches with commits that origin/<base> does not hold even as a patch
+    (`git cherry`: "+" only), and that no open PR has as its head. Integration branches are left out."""
+    counts = ahead_of(path, base_ref)
+    skip = set(skip) | {base}
+    candidates = [b for b in counts if b not in skip and b not in heads and counts[b] > 0]
+    if not candidates:
+        return []
+    def extra(branch):
+        return cherry_extra(sh("git", "-C", path, "cherry", base_ref, branch))
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        found = list(pool.map(extra, candidates))
+    return [{"branch": b, "commits": len(x)} for b, x in zip(candidates, found) if x]
+
+
+def unpushed(path, name, repo, env=None, meta=None):
+    """Branches and worktrees whose work waits only on this Mac: no PR, not in origin/<default>.
+
+    The owner's goal of 2026-11-20: work that nobody sees is work that nobody merges. A branch counts
+    when `git cherry origin/<default> <branch>` shows a commit ("+" only: a cherry-picked or rebased
+    branch is not flagged) and no open PR has it as its head. A worktree counts when it holds
+    uncommitted files other than next-env.d.ts, .doc-index and tmp/. One `gh pr list` per repo (the
+    PR cache of this script); the answer is cached for 10 minutes in state/unpushed-cache.json, and
+    the per-branch and per-worktree git calls run in parallel."""
+    cache_path = os.path.join(ROOT, "state", "unpushed-cache.json")
+    cache = read_json(cache_path, {})
+    hit = cache.get(name) or {}
+    if hit.get("repo") == repo and time.time() - hit.get("at", 0) < UNPUSHED_TTL:
+        return hit.get("data") or {"branches": [], "worktrees": []}
+    data = {"branches": [], "worktrees": []}
+    base = default_branch(path)
+    base_ref = f"origin/{base}" if base else ""
+    if base_ref and sh("git", "-C", path, "rev-parse", "--verify", "--quiet", base_ref):
+        prs = open_prs(repo, env) if repo else []
+        # `gh` did not answer (None): a branch is not proven to have no PR, so nothing is called unpushed
+        heads = {x.get("headRefName") for x in prs or [] if x.get("headRefName")} if prs is not None else None
+        if heads is not None:
+            skip = INTEGRATION | set((meta or {}).get("integration") or [])
+            data["branches"] = branches_without_pr(path, base, base_ref, heads, skip)
+    trees = [w for w in worktree_list(sh("git", "-C", path, "worktree", "list", "--porcelain"))
+             if os.path.realpath(w["path"]) != os.path.realpath(path)]
+    def dirty(wt):
+        return dirty_files(sh("git", "-C", wt["path"], "status", "--porcelain"))
+    if trees:                           # the main checkout is left out: its count is already in the info line
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for wt, files in zip(trees, list(pool.map(dirty, trees))):
+                if files:
+                    data["worktrees"].append({"path": wt["path"], "branch": wt["branch"],
+                                              "count": len(files), "files": files[:8]})
+    cache[name] = {"at": time.time(), "repo": repo, "data": data}
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False)
+    except OSError:
+        pass
+    return data
+
+
+def unpushed_findings(found, w=None):
+    """(text, data) for the project's card: one line for the branches, one for the dirty worktrees."""
+    w = w or W
+    out = []
+    branches = (found or {}).get("branches") or []
+    if branches:
+        names = ", ".join(b["branch"] for b in branches[:3]) + (" …" if len(branches) > 3 else "")
+        key = "unpushed1" if len(branches) == 1 else "unpushed"
+        out.append((w[key].format(n=len(branches), names=names),
+                    {"kind": "unpushed", "branches": branches, "worktrees": (found or {}).get("worktrees") or []}))
+    trees = (found or {}).get("worktrees") or []
+    if trees:
+        names = ", ".join(os.path.basename(t["path"]) for t in trees[:3]) + (" …" if len(trees) > 3 else "")
+        key = "dirty_wt1" if len(trees) == 1 else "dirty_wt"
+        out.append((w[key].format(n=len(trees), names=names),
+                    {"kind": "worktree_dirty", "worktrees": trees}))
+    return out
+
+
 def selftest():
     from datetime import datetime, timezone, timedelta
     now = datetime(2026, 11, 17, 12, 0, tzinfo=timezone.utc)
@@ -314,6 +488,44 @@ def selftest():
     assert pr_findings(None, 3, now) == ([], []) and pr_findings([], 3, now) == ([], [])
     W = WORDS["en"]
     assert pr_findings([pr(9, "CONFLICTING", "DIRTY")], 3, now)[0][0][0] == "⚔️ PR #9: conflict with main"
+
+    # worktrees, uncommitted files and the patch-equivalent check (the owner's goal of 2026-11-20)
+    porcelain = ("worktree /repo\nHEAD " + "a" * 40 + "\nbranch refs/heads/main\n\n"
+                 "worktree /repo/.claude/worktrees/panel-motion\nHEAD " + "b" * 40 + "\n"
+                 "branch refs/heads/panel-motion\n\n"
+                 "worktree /repo-sibling\nHEAD " + "c" * 40 + "\ndetached\n")
+    wts = worktree_list(porcelain)
+    assert [w["path"] for w in wts] == ["/repo", "/repo/.claude/worktrees/panel-motion", "/repo-sibling"], wts
+    assert [w["branch"] for w in wts] == ["main", "panel-motion", ""], wts
+    assert worktree_list("") == []
+    dirty = (" M apps/web/next-env.d.ts\n?? tmp/scratch.md\n M .doc-index/x.json\n"
+             " M src/page.tsx\nR  old/name.ts -> new/name.ts\n?? src/tmpfile.ts\n")
+    assert dirty_files(dirty) == ["src/page.tsx", "old/name.ts", "new/name.ts", "src/tmpfile.ts"], dirty_files(dirty)
+    assert dirty_files("") == []
+    noise = ("?? apps/web/.brief.md\n?? .brand-profile-source.png\n?? node_modules\n"
+             "?? apps/api/.tmp-bc-create.ts\n?? apps/web/next-env.d.ts\n M src/real.ts\n")
+    assert dirty_files(noise) == ["src/real.ts"], dirty_files(noise)
+    assert {"develop", "main", "staging"} <= INTEGRATION, INTEGRATION
+    assert cherry_extra("+ " + "d" * 40 + "\n- " + "e" * 40 + "\n") == ["d" * 40]
+    assert cherry_extra("") == []
+
+    W = WORDS["uk"]
+    found = {"branches": [{"branch": "feat/a", "commits": 2}, {"branch": "feat/b", "commits": 1},
+                          {"branch": "fix/c", "commits": 1}, {"branch": "feat/d", "commits": 3}],
+             "worktrees": [{"path": "/repo/.claude/worktrees/panel-motion", "branch": "panel-motion",
+                            "count": 2, "files": ["a.js", "b.js"]}]}
+    texts = unpushed_findings(found)
+    assert texts[0][0] == "⚠️ 4 гілок поза PR: feat/a, feat/b, fix/c …", texts[0][0]
+    assert texts[0][1]["kind"] == "unpushed" and len(texts[0][1]["branches"]) == 4, texts[0][1]
+    assert texts[1][0] == "⚠️ незбережено у робочій копії panel-motion", texts[1][0]
+    assert texts[1][1]["kind"] == "worktree_dirty", texts[1][1]
+    assert unpushed_findings({"branches": [{"branch": "x", "commits": 1}], "worktrees": []})[0][0] == "⚠️ гілка поза PR: x"
+    assert unpushed_findings({"branches": [], "worktrees": []}) == []
+    assert unpushed_findings({}) == []
+    W = WORDS["en"]
+    assert unpushed_findings({"branches": [], "worktrees": [{"path": "/r/wt", "branch": "b", "count": 1,
+                                                             "files": ["x"]}]})[0][0] == "⚠️ uncommitted in worktree wt"
+    W = WORDS["uk"]
     print("status selftest: ok")
 
 
@@ -423,6 +635,7 @@ def project_state(p, services, ops):
             st["info"].append(f"↓{behind} ↑{ahead}")
     repo = sh("git", "-C", path, "remote", "get-url", "origin").removesuffix(".git")
     repo = repo.split("github.com")[-1].lstrip(":/") if "github.com" in repo else ""
+    env = None
     if repo:
         env = gh_env(repo, services)
         st["links"] = {"repo": f"https://github.com/{repo}", "prs": f"https://github.com/{repo}/pulls",
@@ -454,6 +667,12 @@ def project_state(p, services, ops):
         for wf, (conclusion, run_url) in latest.items():
             if conclusion == "failure":
                 problem(f"main: {wf} failure", run_url)
+            transition("status", name, f"{name}/ci/{wf}", conclusion == "failure", "failed", "recovered",
+                       f"{st['tag']} main: {wf}", run_url)
+    # Work that waits only on this Mac (the owner's goal of 2026-11-20): a branch outside every open PR
+    # and a worktree with uncommitted files are invisible until someone names them.
+    for text, data in unpushed_findings(unpushed(path, name, repo, env, meta)):
+        problem(text, "", data)
     for s in services:
         if s.get("project") == name and s.get("type") == "url":
             started = time.time()
@@ -471,6 +690,8 @@ def project_state(p, services, ops):
                 problem(f"{s['name']}: {W['cert']}", s["url"])
             elif not ok:
                 problem(f"{s['name']}: HTTP {code or W['no_answer']}", s["url"])
+            transition("status", name, f"{name}/url/{s['name']}", not ok, "down", "back",
+                       f"{st['tag']} {s['name']}", s["url"])
     return known_problems(st, mine)
 
 

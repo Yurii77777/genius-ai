@@ -25,6 +25,19 @@ def read(path, default):
         return default
 
 
+def active(cfg, root):
+    """[{"name", "path", "tag", "spoken"}] of the attached projects that are not paused — the one reading of which
+    projects are active (bin/lib/agents_watch.py). A project whose folder has no project.json counts as active."""
+    out = []
+    for p in cfg.get("projects") or []:
+        meta = read(os.path.join(root, "projects", p.get("name", ""), "project.json"), {})
+        if meta.get("paused"):
+            continue
+        out.append({"name": p.get("name"), "path": os.path.expanduser(p.get("path") or ""),
+                    "tag": meta.get("tag") or p.get("name"), "spoken": meta.get("spoken") or ""})
+    return out
+
+
 def main():
     if len(sys.argv) < 3 or sys.argv[1] not in ("pause", "resume", "hold", "unhold"):
         sys.exit("usage: bin/genius pause|resume|unhold <project name or tag> | hold <project name or tag> [why]")

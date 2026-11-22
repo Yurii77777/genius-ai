@@ -215,7 +215,14 @@ def pending():
 
 
 def archive(day, records):
-    """A digested day: its live file joins the day's archive, the ledger records it."""
+    """A digested day: its live file joins the day's archive, the ledger records it.
+
+    The day is sealed only when nothing is left in text: state/handoff.md may not hold an open
+    question that no operation tracks (bin/lib/handoff_guard.py). A refused digest exits 1, names
+    the lines and prints the `bin/genius ops add …` command of each."""
+    sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+    import handoff_guard
+    handoff_guard.enforce()
     import gzip
     path = os.path.join(DIR, day + ".jsonl")
     index = read(INDEX, {})

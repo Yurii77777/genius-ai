@@ -3,7 +3,7 @@
     bin/genius agent <role> <name> <folder> "<brief>"
     bin/genius agent roles                      the mapping in force, and where each model comes from
 
-    <role>    code · review · final-review · research · bulk · watch · look · render   (or a model: deepseek, flash, claude, codex)
+    <role>    code · review · final-review · research · bulk · watch · look · render · judge   (or a model: deepseek, flash, claude, codex)
     <name>    the terminal name in Herdr, «<tag>-<task>» (1-32 of a-z 0-9 - _)
     <folder>  where it works: a folder Claude Code already trusts (a project's path)
 
@@ -23,10 +23,14 @@ Providers:
 - codex    the Codex CLI. No Claude Code hooks: its brief carries the knowledge search command.
 - claude   Claude Code as is (optionally a model: "model": "sonnet").
 A provider whose limits are nearly spent (bin/genius models: 5 h or 7 d ≥ 95 %) gives way to its fallback.
+With "claude_fallback": false in genius.config.json, Claude is the coordinator only and never a stand-in: a role
+whose chain cannot work starts nothing and says why. A project that allows Claude may still use it.
 
 Every brief gets the standard ending (ask, do not invent; stop what you start; the heavy queue; the
-knowledge base) from the script, so no brief forgets it. The terminal gets the labels genius.role and
-genius.model: the panel shows the model beside the agent.
+knowledge base) from the script, so no brief forgets it. Before the critic's notes it also gets the context of
+every brief (bin/lib/briefctx.py): the owner's rules from the knowledge base and the project's skills. A Codex or
+Ollama agent has no Claude Code hooks, so that block is its only source. The terminal gets the labels
+genius.role and genius.model: the panel shows the model beside the agent.
 """
 import json
 import os
@@ -37,6 +41,20 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+
+
+def user_path():
+    """Background jobs (the watcher, the review loop, launchd) start with a bare PATH: no nvm, no Homebrew.
+    Add the user's usual program folders, so a provider that is installed (codex under nvm) is found."""
+    import glob
+    home = os.path.expanduser("~")
+    extra = sorted(glob.glob(os.path.join(home, ".nvm/versions/node/*/bin")), reverse=True) + [
+        "/opt/homebrew/bin", "/usr/local/bin", os.path.join(home, ".local/bin"), os.path.join(home, ".bun/bin")]
+    have = os.environ.get("PATH", "").split(os.pathsep)
+    os.environ["PATH"] = os.pathsep.join(have + [d for d in extra if os.path.isdir(d) and d not in have])
+
+
+user_path()
 OLLAMA = os.environ.get("OLLAMA_HOST_URL", "http://127.0.0.1:11434")
 FAST = "deepseek-v4.1-flash:cloud"
 PRO = "deepseek-v4-pro:cloud"
@@ -65,6 +83,16 @@ DEFAULT_ROLES = {
                      "about": "the last review before the user's word to merge: Claude only"},
     "look":         {"chain": [{"provider": "codex"}, {"provider": "claude"}],
                      "about": "see and judge an image: screenshots, mock-ups, design review (no Ollama model sees images)"},
+    # The critic of every brief (bin/lib/critic.py, the owner's rule of 2026-11-20: a brief is judged by another
+    # provider than the one that wrote it — here Claude, the coordinator). Never Claude: it would prove nothing.
+    "critic":       {"chain": [{"provider": "codex"}, O("kimi-k3.1-pro:cloud"), O(FAST)],
+                     "about": "the critic of a brief before an agent starts: another provider than the author"},
+    # The judge of an action or a question that no rule decides (bin/lib/judge.py; the owner's decision of
+    # 2026-11-20). The local Ollama first, because it costs the user nothing; Claude last, because a judge call on
+    # it spends the user's own 5-hour window. The family of the agent judged is always skipped.
+    "judge":        {"chain": [O("kimi-k3.1-pro:cloud"), O("glm-5.3:cloud"), O(FAST), {"provider": "codex"},
+                               {"provider": "claude", "model": "sonnet"}],
+                     "about": "the gate's verdict on an action and the watcher's answer to a question"},
     # Drawing an image. Claude cannot draw. A local image model is the LAST link, for when Codex has no limits
     # left (the user's decision of 2026-11-17): it is heavy for the computer, so it has a guard. Add it in the
     # config, the product does not know your local model:
@@ -190,6 +218,11 @@ def pick(role_name, project):
         if i:
             notes.append(f"fallback {i}: {label}")
         return dict(link), notes
+    if not (allowed and "claude" in allowed) and \
+            read(os.path.join(ROOT, "genius.config.json"), {}).get("claude_fallback", True) is False:
+        # The owner's choice (config «claude_fallback»: false): Claude is the coordinator, never a stand-in for a
+        # cheap model. A role with no live link starts nothing and says why.
+        sys.exit(f"no model of «{role_name}» can work now (Claude fallback is off): " + "; ".join(notes))
     # Nothing in the chain can work (not installed, no subscription, not allowed for this project): Claude Code
     # itself is the one provider every install has, so the work is never refused — the note says why.
     # A working role on Claude takes the cheaper Claude model: the coordinator's own model is for judgement.
@@ -288,19 +321,28 @@ def command(spec, brief):
         env = {"ANTHROPIC_BASE_URL": OLLAMA, "ANTHROPIC_AUTH_TOKEN": "ollama", "ANTHROPIC_MODEL": model,
                "ANTHROPIC_DEFAULT_OPUS_MODEL": model, "ANTHROPIC_DEFAULT_SONNET_MODEL": FAST,
                "ANTHROPIC_DEFAULT_HAIKU_MODEL": FAST, "CLAUDE_CODE_SUBAGENT_MODEL": FAST,
+               "GENIUS_AGENT_MODEL": model,                # the gate skips a judge of the agent's own family
                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION": "false"}
         exports = " ".join(f"{k}={v}" for k, v in env.items())
         # «auto» mode cannot work through Ollama (its safety check runs on Anthropic's servers): the agent runs in
         # «default» mode, and the gate (bin/lib/gate.py, a PreToolUse hook) answers every action, so no prompt waits
-        return model, ["zsh", "-lic", f'unset ANTHROPIC_API_KEY; {exports} GENIUS_AGENT=1 exec claude '
-                       f'--permission-mode default --settings "{gate_settings()}" "$0"', brief]
+        return model, ["zsh", "-lic", f'unset ANTHROPIC_API_KEY; {exports} GENIUS_AGENT=1 GENIUS_AUTHOR=ollama '
+                                      f'SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 exec claude '
+                                       f'--permission-mode default --settings "{gate_settings()}" "$0"', brief]
     if spec["provider"] == "codex":
         model = spec.get("model", "")
         flag = f'-m {model} ' if model else ""
-        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 exec codex {flag}"$0"', brief]
+        # No approval prompt (owner 20.11: «я три рази відповідав агентам»): Codex writes only in its folder and in
+        # genius-ai's state (the heavy queue), may use the network, and is never asked.
+        box = (f'-s workspace-write -a never -c sandbox_workspace_write.network_access=true '
+               f'--add-dir "{os.path.join(ROOT, "state")}" ')
+        return model or "codex", ["zsh", "-lic", f'GENIUS_AGENT=1 GENIUS_AUTHOR=codex exec codex {box}{flag}"$0"', brief]
     model = spec.get("model", "")
     flag = f"--model {model} " if model else ""
-    return model or "claude", ["zsh", "-lic", f'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false GENIUS_AGENT=1 exec claude {flag}"$0"', brief]
+    return model or "claude", ["zsh", "-lic", f'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false GENIUS_AGENT=1 '
+                                              f'GENIUS_AUTHOR=claude GENIUS_AGENT_MODEL={model or "claude"} '
+                                              f'SKIP_ATTENTION_NOTIFY=1 SESSION_OPEN_NO_DEV=1 '
+                                              f'exec claude {flag}"$0"', brief]
 
 
 def show_roles():
@@ -329,7 +371,36 @@ def main():
         sys.exit(f"bad name «{name}»: 1-32 of a-z 0-9 - _")
     if not os.path.isdir(folder):
         sys.exit(f"no folder {folder}")
-    spec, notes = pick(role_name, project_of(folder))
+    project = project_of(folder)
+    spec, notes = pick(role_name, project)
+    # The context of every brief (the owner's goal of 2026-11-20): the owner's rules from the knowledge base and the
+    # project's skills, before «Critic notes». It comes from the script, so no provider and no brief misses it; the
+    # evidence is the critic's own, so one search of the knowledge base serves both.
+    import briefctx
+    import critic
+    base = brief
+    try:
+        ev = critic.evidence(base, folder, project.get("name", ""))
+    except Exception:
+        ev = {"rules": [], "code": []}
+    ctx = briefctx.context(base, folder, project.get("name", ""), role_name,
+                           rules_fn=lambda b, p, n: ev["rules"][:n])
+    if ctx["text"]:
+        brief = base + "\n\n" + ctx["text"]
+        notes.append(f"context: {ctx['rules']} owner rules · {ctx['skills']} skills")
+    else:
+        notes.append("context: no rule and no skill bears on this brief")
+    # The critic (the owner's rule of 2026-11-20): every brief is read by a model of ANOTHER provider before the
+    # agent starts, and its notes go into the brief. It never blocks the start: no answer within 180 s → no notes,
+    # and state/brief-critic.jsonl says why. There is no switch: a brief without the critic is not a brief.
+    critique = critic.notes_for(base, folder, project.get("name", ""), ev=ev,
+                                author=os.environ.get("GENIUS_AUTHOR") or "claude")
+    if critique["notes"]:
+        brief = brief + "\n\n" + critic.block(critique["notes"])
+        notes.append(f"critic: {critique['provider']} · {len(critique['notes'].splitlines())} lines · "
+                     f"{int(critique['ms'] / 1000)} s")
+    else:
+        notes.append(f"critic: no notes ({critique['why']})")
     if not shutil.which("hc"):
         # No Herdr: nothing to show the agent in. The coordinator runs it as an internal subagent instead;
         # this prints what the role resolved to, and the ending every brief must carry.

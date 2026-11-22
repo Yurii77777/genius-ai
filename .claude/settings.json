@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_start.py\" 2>/dev/null || true",
-            "timeout": 40,
+            "timeout": 70,
             "statusMessage": "genius-ai: читаю конфіг"
           }
         ]
@@ -23,6 +23,11 @@
           {
             "type": "command",
             "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/bin/lib/daylog.py\" hook 2>/dev/null || true",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/bin/lib/done_auto.py\" hook 2>/dev/null || true",
             "timeout": 5
           },
           {
@@ -60,6 +65,11 @@
             "type": "command",
             "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/bin/lib/know.py\" hook 2>/dev/null || true",
             "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/bin/lib/shelf.py\" hook 2>/dev/null || true",
+            "timeout": 5
           }
         ]
       }
@@ -71,6 +81,17 @@
             "type": "command",
             "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/voice/lib/work_status.py\" 2>/dev/null || true",
             "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$CLAUDE_PROJECT_DIR/bin/lib/critic.py\" hook 2>/dev/null || true",
+            "timeout": 200,
+            "statusMessage": "genius-ai: критика брифу"
           }
         ]
       }
